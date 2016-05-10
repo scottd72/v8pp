@@ -20,7 +20,7 @@ namespace v8pp {
 /// Dot symbols in option name delimits subobjects name.
 /// return false if the value doesn't exist in the options object
 template<typename T>
-bool get_option(v8::Isolate* isolate, v8::Handle<v8::Object> options,
+bool get_option(v8::Isolate* isolate, v8::Local<v8::Object> options,
 	char const* name, T& value)
 {
 	char const* dot = strchr(name, '.');
@@ -45,7 +45,7 @@ bool get_option(v8::Isolate* isolate, v8::Handle<v8::Object> options,
 /// Dot symbols in option name delimits subobjects name.
 /// return false if the value doesn't exists in the options subobject
 template<typename T>
-bool set_option(v8::Isolate* isolate, v8::Handle<v8::Object> options,
+bool set_option(v8::Isolate* isolate, v8::Local<v8::Object> options,
 	char const* name, T const& value)
 {
 	char const* dot = strchr(name, '.');
@@ -64,7 +64,7 @@ bool set_option(v8::Isolate* isolate, v8::Handle<v8::Object> options,
 /// Set named constant in V8 object
 /// Subobject names are not supported
 template<typename T>
-void set_const(v8::Isolate* isolate, v8::Handle<v8::Object> options,
+void set_const(v8::Isolate* isolate, v8::Local<v8::Object> options,
 	char const* name, T const& value)
 {
 	options->ForceSet(v8pp::to_v8(isolate, name), to_v8(isolate, value),

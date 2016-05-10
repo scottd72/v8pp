@@ -32,7 +32,7 @@ struct persistent : public v8::UniquePersistent<T>
 	}
 
 	template<typename S>
-	persistent(v8::Isolate* isolate, v8::Handle<S> const& handle)
+	persistent(v8::Isolate* isolate, v8::Local<S> const& handle)
 		: base_class(isolate, handle)
 	{
 	}
@@ -81,7 +81,7 @@ public:
 	}
 
 	/// Create a persistent pointer from V8 Value, store persistent handle to it
-	explicit persistent_ptr(v8::Isolate* isolate, v8::Handle<v8::Value> handle)
+	explicit persistent_ptr(v8::Isolate* isolate, v8::Local<v8::Value> handle)
 		: value_()
 	{
 		reset(isolate, from_v8<T*>(isolate, handle));

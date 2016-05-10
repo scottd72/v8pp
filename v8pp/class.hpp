@@ -214,7 +214,7 @@ private:
 
 	~class_singleton() {}
 
-	v8::Handle<v8::Object> wrap(T* object, bool destroy_after)
+	v8::Local<v8::Object> wrap(T* object, bool destroy_after)
 	{
 		v8::EscapableHandleScope scope(isolate_);
 
@@ -358,17 +358,17 @@ public:
 		js_function_template()->Inherit(base->class_function_template());
 	}
 
-	v8::Handle<v8::Object> wrap_external_object(T* object)
+	v8::Local<v8::Object> wrap_external_object(T* object)
 	{
 		return wrap(object, false);
 	}
 
-	v8::Handle<v8::Object> wrap_object(T* object)
+	v8::Local<v8::Object> wrap_object(T* object)
 	{
 		return wrap(object, true);
 	}
 
-	v8::Handle<v8::Object> wrap_object(v8::FunctionCallbackInfo<v8::Value> const& args)
+	v8::Local<v8::Object> wrap_object(v8::FunctionCallbackInfo<v8::Value> const& args)
 	{
 		return ctor_? wrap_object(ctor_(args)) : throw std::runtime_error("create is not allowed");
 	}
@@ -379,7 +379,7 @@ public:
 
 		while (value->IsObject())
 		{
-			v8::Handle<v8::Object> obj = value->ToObject();
+			v8::Local<v8::Object> obj = value->ToObject();
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
@@ -394,7 +394,7 @@ public:
 		return nullptr;
 	}
 
-	v8::Handle<v8::Object> find_object(T const* obj)
+	v8::Local<v8::Object> find_object(T const* obj)
 	{
 		return class_info::find_object(isolate_, obj);
 	}
@@ -486,7 +486,7 @@ public:
 			setter = nullptr;
 		}
 
-		v8::Handle<v8::Value> data = detail::set_external_data(isolate(), attribute);
+		v8::Local<v8::Value> data = detail::set_external_data(isolate(), attribute);
 		v8::PropertyAttribute const prop_attrs = v8::PropertyAttribute(v8::DontDelete | (setter? 0 : v8::ReadOnly));
 
 		class_singleton_.class_function_template()->PrototypeTemplate()->SetAccessor(
@@ -509,7 +509,7 @@ public:
 			setter = nullptr;
 		}
 
-		v8::Handle<v8::Value> data = detail::set_external_data(isolate(), prop);
+		v8::Local<v8::Value> data = detail::set_external_data(isolate(), prop);
 		v8::PropertyAttribute const prop_attrs = v8::PropertyAttribute(v8::DontDelete | (setter? 0 : v8::ReadOnly));
 
 		class_singleton_.class_function_template()->PrototypeTemplate()->SetAccessor(v8pp::to_v8(isolate(), name),
@@ -543,7 +543,7 @@ public:
 
 	/// Create JavaScript object which references externally created C++ class.
 	/// It will not take ownership of the C++ pointer.
-	static v8::Handle<v8::Object> reference_external(v8::Isolate* isolate, T* ext)
+	static v8::Local<v8::Object> reference_external(v8::Isolate* isolate, T* ext)
 	{
 		return class_singleton::instance(isolate).wrap_external_object(ext);
 	}
@@ -556,27 +556,27 @@ public:
 
 	/// As reference_external but delete memory for C++ object
 	/// when JavaScript object is deleted. You must use "new" to allocate ext.
-	static v8::Handle<v8::Object> import_external(v8::Isolate* isolate, T* ext)
+	static v8::Local<v8::Object> import_external(v8::Isolate* isolate, T* ext)
 	{
 		return class_singleton::instance(isolate).wrap_object(ext);
 	}
 
 	/// Get wrapped object from V8 value, may return nullptr on fail.
-	static T* unwrap_object(v8::Isolate* isolate, v8::Handle<v8::Value> value)
+	static T* unwrap_object(v8::Isolate* isolate, v8::Local<v8::Value> value)
 	{
 		return class_singleton::instance(isolate).unwrap_object(value);
 	}
 
 	/// Create a wrapped C++ object and import it into JavaScript
 	template<typename ...Args>
-	static v8::Handle<v8::Object> create_object(v8::Isolate* isolate, Args... args)
+	static v8::Local<v8::Object> create_object(v8::Isolate* isolate, Args... args)
 	{
 		T* obj = v8pp::factory<T>::create(isolate, std::forward<Args>(args)...);
 		return import_external(isolate, obj);
 	}
 
 	/// Find V8 object handle for a wrapped C++ object, may return empty handle on fail.
-	static v8::Handle<v8::Object> find_object(v8::Isolate* isolate, T const* obj)
+	static v8::Local<v8::Object> find_object(v8::Isolate* isolate, T const* obj)
 	{
 		return class_singleton::instance(isolate).find_object(obj);
 	}

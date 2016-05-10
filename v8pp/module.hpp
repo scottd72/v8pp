@@ -30,7 +30,7 @@ public:
 	{
 	}
 
-	explicit module(v8::Isolate* isolate, v8::Handle<v8::ObjectTemplate> obj)
+	explicit module(v8::Isolate* isolate, v8::Local<v8::ObjectTemplate> obj)
 		: isolate_(isolate)
 		, obj_(obj)
 	{
@@ -41,7 +41,7 @@ public:
 
 	/// Set a V8 value in the module with specified name
 	template<typename Data>
-	module& set(char const* name, v8::Handle<Data> value)
+	module& set(char const* name, v8::Local<Data> value)
 	{
 		obj_->Set(v8pp::to_v8(isolate_, name), value);
 		return *this;
@@ -85,7 +85,7 @@ public:
 			setter = nullptr;
 		}
 
-		v8::Handle<v8::Value> data = detail::set_external_data(isolate_, &var);
+		v8::Local<v8::Value> data = detail::set_external_data(isolate_, &var);
 		v8::PropertyAttribute const prop_attrs = v8::PropertyAttribute(v8::DontDelete | (setter ? 0 : v8::ReadOnly));
 
 		obj_->SetAccessor(v8pp::to_v8(isolate_, name), getter, setter, data, v8::DEFAULT, prop_attrs);
@@ -105,7 +105,7 @@ public:
 			setter = nullptr;
 		}
 
-		v8::Handle<v8::Value> data = detail::set_external_data(isolate_, prop);
+		v8::Local<v8::Value> data = detail::set_external_data(isolate_, prop);
 		v8::PropertyAttribute const prop_attrs = v8::PropertyAttribute(v8::DontDelete | (setter? 0 : v8::ReadOnly));
 
 		obj_->SetAccessor(v8pp::to_v8(isolate_, name), getter, setter, data, v8::DEFAULT, prop_attrs);
@@ -146,7 +146,7 @@ private:
 	}
 
 	v8::Isolate* isolate_;
-	v8::Handle<v8::ObjectTemplate> obj_;
+	v8::Local<v8::ObjectTemplate> obj_;
 };
 
 } // namespace v8pp

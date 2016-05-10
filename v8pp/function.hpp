@@ -67,14 +67,14 @@ set_external_data(v8::Isolate* isolate, T const& value)
 
 template<typename T>
 typename std::enable_if<is_pointer_cast_allowed<T>::value, T>::type
-get_external_data(v8::Handle<v8::Value> value)
+get_external_data(v8::Local<v8::Value> value)
 {
 	return pointer_cast<T>(value.As<v8::External>()->Value());
 }
 
 template<typename T>
 typename std::enable_if<!is_pointer_cast_allowed<T>::value, T&>::type
-get_external_data(v8::Handle<v8::Value> value)
+get_external_data(v8::Local<v8::Value> value)
 {
 	T* data = static_cast<T*>(value.As<v8::External>()->Value());
 	return *data;
@@ -141,7 +141,7 @@ void forward_function(v8::FunctionCallbackInfo<v8::Value> const& args)
 
 /// Wrap C++ function into new V8 function template
 template<typename F>
-v8::Handle<v8::FunctionTemplate> wrap_function_template(v8::Isolate* isolate, F func)
+v8::Local<v8::FunctionTemplate> wrap_function_template(v8::Isolate* isolate, F func)
 {
 	return v8::FunctionTemplate::New(isolate, &detail::forward_function<F>,
 		detail::set_external_data(isolate, func));
@@ -151,9 +151,9 @@ v8::Handle<v8::FunctionTemplate> wrap_function_template(v8::Isolate* isolate, F 
 /// Set nullptr or empty string for name
 /// to make the function anonymous
 template<typename F>
-v8::Handle<v8::Function> wrap_function(v8::Isolate* isolate, char const* name, F func)
+v8::Local<v8::Function> wrap_function(v8::Isolate* isolate, char const* name, F func)
 {
-	v8::Handle<v8::Function> fn = v8::Function::New(isolate, &detail::forward_function<F>,
+	v8::Local<v8::Function> fn = v8::Function::New(isolate, &detail::forward_function<F>,
 		detail::set_external_data(isolate, func));
 	if (name && *name)
 	{

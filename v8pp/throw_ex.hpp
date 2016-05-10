@@ -20,12 +20,12 @@
 
 namespace v8pp {
 
-inline v8::Handle<v8::Value> throw_ex(v8::Isolate* isolate, char const* str,
-	v8::Local<v8::Value> (*exception_ctor)(v8::Handle<v8::String>) = v8::Exception::Error)
+inline v8::Local<v8::Value> throw_ex(v8::Isolate* isolate, char const* str,
+	v8::Local<v8::Value> (*exception_ctor)(v8::Local<v8::String>) = v8::Exception::Error)
 {
 	v8::EscapableHandleScope scope(isolate);
 
-	v8::Handle<v8::String> message;
+	v8::Local<v8::String> message;
 #ifdef _WIN32
 	int const len = ::MultiByteToWideChar(CP_ACP, 0, str, -1, NULL, 0);
 	if (len > 0)
@@ -41,8 +41,8 @@ inline v8::Handle<v8::Value> throw_ex(v8::Isolate* isolate, char const* str,
 	return scope.Escape(isolate->ThrowException(exception_ctor(message)));
 }
 
-inline v8::Handle<v8::Value> throw_ex(v8::Isolate* isolate, std::string const& str,
-	v8::Local<v8::Value> (*exception_ctor)(v8::Handle<v8::String>) = v8::Exception::Error)
+inline v8::Local<v8::Value> throw_ex(v8::Isolate* isolate, std::string const& str,
+	v8::Local<v8::Value> (*exception_ctor)(v8::Local<v8::String>) = v8::Exception::Error)
 {
 	return throw_ex(isolate, str.c_str(), exception_ctor);
 }
