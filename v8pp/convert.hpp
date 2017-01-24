@@ -707,6 +707,23 @@ v8::Local<T> to_local(v8::Isolate* isolate, v8::PersistentBase<T> const& handle)
 	}
 }
 
+template <typename T, typename Enable = void> struct convert_isolate
+{
+	using convertible = std::integral_constant<bool, false>;
+	// static T from_isolate(v8::Isolate* isolate);
+};
+
+template <> struct convert_isolate<v8::Isolate*>
+{
+	using convertible = std::integral_constant<bool, true>;
+	static v8::Isolate* from_isolate(v8::Isolate* isolate) { return isolate; }
+};
+
+template <class T> struct isolate_convertible
+{
+	static constexpr bool value = convert_isolate<T>::convertible::value;
+};
+
 } // namespace v8pp
 
 #endif // V8PP_CONVERT_HPP_INCLUDED

@@ -131,8 +131,12 @@ typename function_traits<F>::return_type
 call_from_v8_impl(F&& func, v8::FunctionCallbackInfo<v8::Value> const& args,
 	isolate_arg_call_traits<F>, index_sequence<Indices...>)
 {
-	return func(args.GetIsolate(),
-		isolate_arg_call_traits<F>::template arg_from_v8<Indices + 1>(args)...);
+	return func
+		(convert_isolate
+		 <typename call_from_v8_traits<F>::template arg_type<0>>::
+		 from_isolate(args.GetIsolate()), 
+		 isolate_arg_call_traits<F>::template 
+		 arg_from_v8<Indices + 1>(args)...);
 }
 
 template<typename T, typename F, size_t ...Indices>
@@ -140,8 +144,12 @@ typename function_traits<F>::return_type
 call_from_v8_impl(T& obj, F&& func, v8::FunctionCallbackInfo<v8::Value> const& args,
 	isolate_arg_call_traits<F>, index_sequence<Indices...>)
 {
-	return (obj.*func)(args.GetIsolate(),
-		isolate_arg_call_traits<F>::template arg_from_v8<Indices + 1>(args)...);
+	return (obj.*func)
+		(convert_isolate
+		 <typename call_from_v8_traits<F>::template arg_type<0>>::
+		 from_isolate(args.GetIsolate()), 
+		 isolate_arg_call_traits<F>::template arg_from_v8<Indices + 1>
+		 (args)...);
 }
 
 template<typename F, size_t ...Indices>
@@ -149,7 +157,10 @@ typename function_traits<F>::return_type
 call_from_v8_impl(F&& func, v8::FunctionCallbackInfo<v8::Value> const& args,
 	isolate_v8_args_call_traits<F>, index_sequence<Indices...>)
 {
-	return func(args.GetIsolate(), args);
+	return func
+		(convert_isolate
+		 <typename call_from_v8_traits<F>::template arg_type<0>>::
+		 from_isolate(args.GetIsolate()), args);
 }
 
 template<typename T, typename F, size_t ...Indices>
@@ -157,7 +168,10 @@ typename function_traits<F>::return_type
 call_from_v8_impl(T& obj, F&& func, v8::FunctionCallbackInfo<v8::Value> const& args,
 	isolate_v8_args_call_traits<F>, index_sequence<Indices...>)
 {
-	return (obj.*func)(args.GetIsolate(), args);
+	return (obj.*func)
+		(convert_isolate
+		 <typename call_from_v8_traits<F>::template arg_type<0>>::
+		 from_isolate(args.GetIsolate()), args);
 }
 
 template<typename F>
