@@ -717,6 +717,7 @@ template <> struct convert_isolate<v8::Isolate*>
 {
 	using convertible = std::integral_constant<bool, true>;
 	static v8::Isolate* from_isolate(v8::Isolate* isolate) { return isolate; }
+  static v8::Isolate* arg_for_call_from_v8(v8::Isolate* i) { return i; }
 };
 
 template <class T> struct isolate_convertible
