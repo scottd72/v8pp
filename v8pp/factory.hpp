@@ -17,7 +17,7 @@
 namespace v8pp {
 
 // Factory that creates new C++ objects of type T
-template<typename T, bool use_shared_ptr = false>
+template<typename T>
 struct factory
 {
 	static size_t const object_size = sizeof(T);
@@ -39,19 +39,24 @@ struct factory
 	}
 };
 
-// Factory that creates new std::shared_ptr<T> C++ objects of type T
-template<typename T>
-struct factory<T, true>
-{
-	template<typename ...Args>
-	static std::shared_ptr<T> create(v8::Isolate*, Args... args)
-	{
-		return std::make_shared<T>(std::forward<Args>(args)...);
-	}
+/*
+Objects embedded with shared_ptrs are handled differently because:
 
-	static void destroy(v8::Isolate*, std::shared_ptr<T> const&)
+1) They may stick around longer than any isolate in which they're embedded,
+in which case any reference/pointer to that isolate at object destruction 
+time is going to be garbage
+
+(2) Their memory probably shouldn't be counted against the amount of 
+externally allocated memory "owned" by the isolate anyways.
+*/
+
+template <typename T>
+struct shared_object_factory
+{
+	template <typename ...Args>
+	static std::shared_ptr<T> create(Args... args)
 	{
-		// do nothing with reference-counted object
+		return std::shared_ptr<T>(new T(std::forward<Args>(args)...));
 	}
 };
 

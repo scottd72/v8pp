@@ -127,12 +127,11 @@ struct r_property_impl<Get, Set, true>
 		info.GetReturnValue().Set(to_v8(isolate, (obj.*get)(isolate)));
 	}
 
-	template<bool use_shared_ptr>
 	static void get(v8::Local<v8::String> name,
 		v8::PropertyCallbackInfo<v8::Value> const& info)
 	try
 	{
-		auto obj = v8pp::class_<class_type, use_shared_ptr>::unwrap_object(
+		auto obj = v8pp::class_<class_type>::unwrap_object(
 			info.GetIsolate(), info.This());
 		assert(obj);
 
@@ -149,7 +148,6 @@ struct r_property_impl<Get, Set, true>
 		info.GetReturnValue().Set(throw_ex(info.GetIsolate(), ex.what()));
 	}
 
-	template<bool use_shared_ptr>
 	static void set(v8::Local<v8::String> name, v8::Local<v8::Value>,
 		v8::PropertyCallbackInfo<void> const& info)
 	{
@@ -246,12 +244,11 @@ struct rw_property_impl<Get, Set, true>
 		(obj.*set)(isolate, v8pp::from_v8<value_type>(isolate, value));
 	}
 
-	template<bool use_shared_ptr>
 	static void set(v8::Local<v8::String> name, v8::Local<v8::Value> value,
 		v8::PropertyCallbackInfo<void> const& info)
 	try
 	{
-		auto obj = v8pp::class_<class_type, use_shared_ptr>::unwrap_object(
+		auto obj = v8pp::class_<class_type>::unwrap_object(
 			info.GetIsolate(), info.This());
 		assert(obj);
 

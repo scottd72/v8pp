@@ -16,7 +16,6 @@
 #include <array>
 #include <vector>
 #include <map>
-#include <memory>
 #include <iterator>
 #include <stdexcept>
 #include <type_traits>
@@ -24,7 +23,7 @@
 
 namespace v8pp {
 
-template<typename T, bool use_shared_ptr>
+template<typename T>
 class class_;
 
 // Generic convertor
@@ -80,14 +79,12 @@ struct convert<std::basic_string<Char, Traits, Alloc>>
 	{
 		if (sizeof(Char) == 1)
 		{
-			return v8::String::NewFromUtf8(isolate,
-				reinterpret_cast<char const*>(value.data()),
+			return v8::String::NewFromUtf8(isolate, reinterpret_cast<char const*>(value.data()),
 				v8::String::kNormalString, static_cast<int>(value.length()));
 		}
 		else
 		{
-			return v8::String::NewFromTwoByte(isolate,
-				reinterpret_cast<uint16_t const*>(value.data()),
+			return v8::String::NewFromTwoByte(isolate, reinterpret_cast<uint16_t const*>(value.data()),
 				v8::String::kNormalString, static_cast<int>(value.length()));
 		}
 	}
@@ -103,8 +100,7 @@ struct convert<Char const*>
 	// A string that converts to Char const *
 	struct convertible_string : std::basic_string<Char>
 	{
-		convertible_string(Char const* str, size_t len)
-			: std::basic_string<Char>(str, len) {}
+		convertible_string(Char const* str, size_t len) : std::basic_string<Char>(str, len) {}
 		operator Char const*() const { return this->c_str(); }
 	};
 
@@ -139,14 +135,12 @@ struct convert<Char const*>
 	{
 		if (sizeof(Char) == 1)
 		{
-			return v8::String::NewFromUtf8(isolate,
-				reinterpret_cast<char const*>(value),
+			return v8::String::NewFromUtf8(isolate, reinterpret_cast<char const*>(value),
 				v8::String::kNormalString, static_cast<int>(len));
 		}
 		else
 		{
-			return v8::String::NewFromTwoByte(isolate,
-				reinterpret_cast<uint16_t const*>(value),
+			return v8::String::NewFromTwoByte(isolate, reinterpret_cast<uint16_t const*>(value),
 				v8::String::kNormalString, static_cast<int>(len));
 		}
 	}
@@ -222,13 +216,11 @@ struct convert<T, typename std::enable_if<std::is_integral<T>::value>::type>
 		{
 			if (is_signed)
 			{
-				return v8::Integer::New(isolate,
-					static_cast<int32_t>(value));
+				return v8::Integer::New(isolate, static_cast<int32_t>(value));
 			}
 			else
 			{
-				return v8::Integer::NewFromUnsigned(isolate,
-					static_cast<uint32_t>(value));
+				return v8::Integer::NewFromUnsigned(isolate, static_cast<uint32_t>(value));
 			}
 		}
 		else
@@ -259,8 +251,7 @@ struct convert<T, typename std::enable_if<std::is_enum<T>::value>::type>
 
 	static to_type to_v8(v8::Isolate* isolate, T value)
 	{
-		return convert<underlying_type>::to_v8(isolate,
-			static_cast<underlying_type>(value));
+		return convert<underlying_type>::to_v8(isolate, static_cast<underlying_type>(value));
 	}
 };
 
@@ -315,9 +306,8 @@ struct convert<std::array<T, N>>
 
 		if (array->Length() != N)
 		{
-			throw std::runtime_error("Invalid array length: expected "
-				+ std::to_string(N) + " actual "
-				+ std::to_string(array->Length()));
+			throw std::runtime_error("Invalid array length: expected " + std::to_string(N)
+				+ " actual " + std::to_string(array->Length()));
 		}
 
 		from_type result;
@@ -414,8 +404,7 @@ struct convert<std::map<Key, Value, Less, Alloc>>
 		{
 			v8::Local<v8::Value> key = prop_names->Get(i);
 			v8::Local<v8::Value> val = object->Get(key);
-			result.emplace(convert<Key>::from_v8(isolate, key),
-				convert<Value>::from_v8(isolate, val));
+			result.emplace(convert<Key>::from_v8(isolate, key), convert<Value>::from_v8(isolate, val));
 		}
 		return result;
 	}
@@ -427,8 +416,7 @@ struct convert<std::map<Key, Value, Less, Alloc>>
 		v8::Local<v8::Object> result = v8::Object::New(isolate);
 		for (auto const& item: value)
 		{
-			result->Set(convert<Key>::to_v8(isolate, item.first),
-				convert<Value>::to_v8(isolate, item.second));
+			result->Set(convert<Key>::to_v8(isolate, item.first), convert<Value>::to_v8(isolate, item.second));
 		}
 		return scope.Escape(result);
 	}
@@ -509,6 +497,9 @@ struct is_wrapped_class;
 template<typename T>
 struct is_wrapped_class<T> : std::is_class<T> {};
 
+template <typename T>
+struct is_wrapped_class<std::shared_ptr<T>>: std::false_type{};
+
 template<typename T>
 struct is_wrapped_class<v8::Handle<T>, typename std::enable_if<
 	!std::is_same<v8::Handle<T>, v8::Local<T>>::value>::type> : std::false_type{};
@@ -532,9 +523,6 @@ template<typename Key, typename Value, typename Less, typename Alloc>
 struct is_wrapped_class<std::map<Key, Value, Less, Alloc>> : std::false_type {};
 
 template<typename T>
-struct is_wrapped_class<std::shared_ptr<T>> : std::false_type {};
-
-template<typename T>
 struct convert<T*, typename std::enable_if<is_wrapped_class<T>::value>::type>
 {
 	using from_type = T*;
@@ -552,12 +540,12 @@ struct convert<T*, typename std::enable_if<is_wrapped_class<T>::value>::type>
 		{
 			return nullptr;
 		}
-		return class_<class_type, false>::unwrap_object(isolate, value);
+		return class_<class_type>::unwrap_object(isolate, value);
 	}
 
 	static to_type to_v8(v8::Isolate* isolate, T const* value)
 	{
-		return class_<class_type, false>::find_object(isolate, value);
+		return class_<class_type>::find_object(isolate, value);
 	}
 };
 
@@ -591,31 +579,34 @@ struct convert<T, typename std::enable_if<is_wrapped_class<T>::value>::type>
 	}
 };
 
-template<typename T>
-struct convert<std::shared_ptr<T>,
-	typename std::enable_if<is_wrapped_class<T>::value>::type>
+template <typename T>
+struct convert<std::shared_ptr<T>, typename std::enable_if<is_wrapped_class<T>::value>::type>
 {
 	using from_type = std::shared_ptr<T>;
 	using to_type = v8::Handle<v8::Object>;
-	using class_type = typename std::remove_cv<T>::type;
+	using class_type = T;
 
-	static bool is_valid(v8::Isolate*, v8::Handle<v8::Value> value)
+	static bool is_valid(v8::Isolate* isolate, v8::Handle<v8::Value> value)
 	{
-		return !value.IsEmpty() && value->IsObject();
+		return convert<class_type*>::is_valid(isolate, value);
 	}
 
 	static from_type from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value)
 	{
 		if (!is_valid(isolate, value))
 		{
-			return nullptr;
+			throw std::invalid_argument("expected Object");
 		}
-		return class_<class_type, true>::unwrap_object(isolate, value);
+		auto result = class_<class_type>::unwrap_shared_object(isolate, value);
+		if (result.get() == nullptr)
+		{
+			throw std::runtime_error("expected C++ wrapped object with shared_ptr");
+		}
+		return result;
 	}
-
-	static to_type to_v8(v8::Isolate* isolate, std::shared_ptr<T> const& value)
+	static to_type to_v8(v8::Isolate* isolate, from_type value)
 	{
-		return class_<class_type, true>::find_object(isolate, value);
+		return class_<class_type>::find_object(isolate, value.get());
 	}
 };
 
@@ -633,11 +624,10 @@ auto from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value)
 }
 
 template<typename T, typename U>
-auto from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value,U const& default_value)
+auto from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value, U const& default_value)
 	-> decltype(convert<T>::from_v8(isolate, value))
 {
-	return convert<T>::is_valid(isolate, value)?
-		convert<T>::from_v8(isolate, value) : default_value;
+	return convert<T>::is_valid(isolate, value)? convert<T>::from_v8(isolate, value) : default_value;
 }
 
 inline v8::Handle<v8::String> to_v8(v8::Isolate* isolate, char const* str, size_t len)
@@ -646,22 +636,19 @@ inline v8::Handle<v8::String> to_v8(v8::Isolate* isolate, char const* str, size_
 }
 
 template<size_t N>
-v8::Handle<v8::String> to_v8(v8::Isolate* isolate,
-	char const (&str)[N], size_t len = N - 1)
+v8::Handle<v8::String> to_v8(v8::Isolate* isolate, char const (&str)[N], size_t len = N - 1)
 {
 	return convert<char const*>::to_v8(isolate, str, len);
 }
 
 #ifdef WIN32
-inline v8::Handle<v8::String> to_v8(v8::Isolate* isolate,
-	wchar_t const* str, size_t len)
+inline v8::Handle<v8::String> to_v8(v8::Isolate* isolate, wchar_t const* str, size_t len)
 {
 	return convert<wchar_t const*>::to_v8(isolate, str, len);
 }
 
 template<size_t N>
-v8::Handle<v8::String> to_v8(v8::Isolate* isolate,
-	wchar_t const (&str)[N], size_t len = N - 1)
+v8::Handle<v8::String> to_v8(v8::Isolate* isolate, wchar_t const (&str)[N], size_t len = N - 1)
 {
 	return convert<wchar_t const*>::to_v8(isolate, str, len);
 }
@@ -702,15 +689,21 @@ v8::Local<T> to_local(v8::Isolate* isolate, v8::PersistentBase<T> const& handle)
 	}
 	else
 	{
-		return *reinterpret_cast<v8::Local<T>*>(
-			const_cast<v8::PersistentBase<T>*>(&handle));
+		return *reinterpret_cast<v8::Local<T>*>(const_cast<v8::PersistentBase<T>*>(&handle));
 	}
 }
 
 template <typename T, typename Enable = void> struct convert_isolate
 {
 	using convertible = std::integral_constant<bool, false>;
-	// static T from_isolate(v8::Isolate* isolate);
+
+	//   stored for later call to arg_for_call_from_v8 ... this is so
+	//   from_isolate can return an object if the function parameter is a
+	//   pointer. Returning a pointer that then got passed straight to the
+	//   function would result in awkward object lifetime issues.
+	// static T2 from_isolate(v8::Isolate* isolate); 
+
+	// static T arg_for_call_from_v8(T2& t); // (or maybe just T2 t)
 };
 
 template <> struct convert_isolate<v8::Isolate*>
@@ -724,6 +717,7 @@ template <class T> struct isolate_convertible
 {
 	static constexpr bool value = convert_isolate<T>::convertible::value;
 };
+
 
 } // namespace v8pp
 
