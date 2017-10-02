@@ -6,6 +6,8 @@
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
+// Some modifications / additions by Scott Davies.
+
 #ifndef V8PP_CONVERT_HPP_INCLUDED
 #define V8PP_CONVERT_HPP_INCLUDED
 
@@ -90,8 +92,35 @@ struct convert<std::basic_string<Char, Traits, Alloc>>
 	}
 };
 
+template <typename Char>
+struct array_usable_as_string
+{
+	static const bool value = false;
+};
+
+template <>
+struct array_usable_as_string<char>
+{
+	static const bool value = true;
+};
+
+template <>
+struct array_usable_as_string<unsigned char>
+{
+	static const bool value = true;
+};
+
+template <>
+struct array_usable_as_string<uint16_t>
+{
+	static const bool value = true;
+};
+
+	
 template<typename Char>
-struct convert<Char const*>
+struct convert<Char const*,
+							 typename std::enable_if
+							 <array_usable_as_string<Char>::value>::type>
 {
 	static_assert(sizeof(Char) <= sizeof(uint16_t),
 		"only UTF-8 and UTF-16 strings are supported");

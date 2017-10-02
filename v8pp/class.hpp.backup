@@ -6,6 +6,26 @@
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
+
+/* 
+	 Modified by Scott Davies to make things a bit more flexible
+   and idiot-proof. In particular:
+
+   - The old v8pp class_ (in the "shared_ptr" branch, anyhow) had a 
+     template parameter determining whether the values were stored as raw 
+     pointers or shared_ptrs. Unfortunately, the way this interacted with 
+     convert.hpp meant that you couldn't use methods/functions expecting raw
+     pointers or references when the class_ stored shared_ptrs...everything
+     would compile, but then you'd get a runtime failure. 
+
+   - The old v8pp class_ decided whether a C++ method/function was mapped
+     to a "static" JS method/function (that is, associated with the JS 
+     constructor function but not the objects it created) was based on 
+     whether it was actually a method of the original C++ class, which 
+     caused numerous problems. 
+
+*/
+
 #ifndef V8PP_CLASS_HPP_INCLUDED
 #define V8PP_CLASS_HPP_INCLUDED
 
@@ -80,11 +100,10 @@ std::shared_ptr<T const> static_pointer_cast(std::shared_ptr<void const> const& 
 struct class_info
 {
 	type_info const type;
-	bool const is_shared_ptr;
+	//bool const is_shared_ptr;
 
-	class_info(type_info const& type, bool is_shared_ptr)
+	class_info(type_info const& type)
 		: type(type)
-		, is_shared_ptr(is_shared_ptr)
 	{
 	}
 
@@ -92,20 +111,42 @@ struct class_info
 
 	std::string class_name() const
 	{
-		return "v8pp::class_<" + type.name()
-			+ (is_shared_ptr ? ", use_shared_ptr>" : ">");
+		return "v8pp::class_<" + type.name() + ">";
 	}
 };
 
-template<bool use_shared_ptr>
 class object_registry : public class_info
 {
 public:
+	
+	using raw_pointer_type = void*;
+	using raw_const_pointer_type = void const*;
+	using shared_pointer_type = std::shared_ptr<void>;
+	using shared_const_pointer_type = std::shared_ptr<void const>;
+
+	using raw_pointer_cast_function = raw_pointer_type(*)
+		(raw_pointer_type const&);
+	using shared_pointer_cast_function = shared_pointer_type(*)
+		(shared_pointer_type const&);
+	
 	using pointer_type = typename std::conditional<use_shared_ptr,
 		std::shared_ptr<void>, void*>::type;
 	using const_pointer_type = typename std::conditional<use_shared_ptr,
 		std::shared_ptr<void const>, void const*>::type;
 
+	class registry_value {
+	public:
+		enum class value_storage_type { EXTERNAL_RAW, INTERNAL_RAW, SHARED };
+		value_storage_type storage_type;
+		void* value;
+
+		template <class T> T* get_raw_pointer() {
+			if (storage_type != value_storage_type::SHARED) {
+				
+			}
+		}
+	};
+	
 	using cast_function = pointer_type(*)(pointer_type const&);
 	using destroy_function = void(*)(v8::Isolate*, pointer_type const&);
 	using object_id = void*; //TODO: make opaque type
@@ -538,18 +579,6 @@ public:
 		return to_local(isolate_, js_func_.IsEmpty()? func_ : js_func_);
 	}
 
-	/*
-	// XXX experimental
-	void dummy_ctor() {
-		ctor_ = [](v8::FunctionCallbackInfo<v8::Value> const& args) ->
-			object_pointer_type
-		{
-			throw std::runtime_error("This constructor not intended to be called!");
-		};
-		class_function_template()->Inherit(js_function_template());
-	}
-	*/
-  
 	template<typename ...Args>
 	void ctor()
 	{
@@ -676,15 +705,6 @@ public:
 		return *this;
 	}
 
-	/*
-	// XXX experimental
-	class_& dummy_ctor()
-	{
-		class_singleton_.dummy_ctor();
-		return *this;
-	};
-	*/
-	
 	/// Inhert from C++ class U
 	template<typename U>
 	class_& inherit()
