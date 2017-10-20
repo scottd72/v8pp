@@ -635,7 +635,11 @@ struct convert<std::shared_ptr<T>, typename std::enable_if<is_wrapped_class<T>::
 	}
 	static to_type to_v8(v8::Isolate* isolate, from_type value)
 	{
-		return class_<class_type>::find_object(isolate, value.get());
+		v8::Handle<v8::Object> result =
+			class_<class_type>::find_object(isolate, value.get());
+		if (!result.IsEmpty()) { return result; }
+		return class_<class_type>::wrap_shared_object(isolate, value);
+		//return class_<class_type>::find_object(isolate, value.get());
 	}
 };
 

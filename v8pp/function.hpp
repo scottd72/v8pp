@@ -12,6 +12,7 @@
 
 #include <tuple>
 #include <type_traits>
+#include <memory>
 
 #include "v8pp/call_from_v8.hpp"
 #include "v8pp/throw_ex.hpp"
@@ -149,7 +150,7 @@ invoke(v8::FunctionCallbackInfo<v8::Value> const& args)
 	using arguments = typename function_traits<F>::arguments;
 	static_assert(std::tuple_size<arguments>::value > 0, "");
 	using class_type = typename std::decay<
-		typename std::tuple_element<0, arguments>::type>::type;
+          typename std::tuple_element<0, arguments>::type>::type;
 
 	v8::Isolate* isolate = args.GetIsolate();
 	v8::Local<v8::Object> obj = args.This();
@@ -174,18 +175,50 @@ invoke_as_nonmethod(v8::FunctionCallbackInfo<v8::Value> const& args)
 {
 	return call_from_v8(std::forward<F>(get_external_data<F>(args.Data())), args);
 }
-	
 
+
+template <typename T>
+struct remove_shared_ptr_from_type {
+  using type = T;
+};
+
+template <typename T>
+struct remove_shared_ptr_from_type<std::shared_ptr<T>> {
+  using type = T;
+};  
+  
+template <typename T> struct is_shared_ptr: public std::false_type {};
+template <typename T> struct is_shared_ptr<std::shared_ptr<T>>:
+    public std::true_type {};
+  
+// Assumes we're only going to call this on functions with at least one argument
+template <typename F, typename Enable=void>
+struct first_param_is_shared_ptr: public std::false_type {};
+
+template <typename F>
+struct first_param_is_shared_ptr
+<F,
+ typename std::enable_if
+   <is_shared_ptr
+    <typename std::decay
+     <typename std::tuple_element
+      <0, typename function_traits<F>::arguments>
+      ::type>
+     ::type>
+    ::value>
+ ::type>: public std::true_type {};
 	
 // Added
 template <typename F>
-typename std::enable_if<!std::is_member_function_pointer<F>::value,
-												typename function_traits<F>::return_type>::type
+typename std::enable_if<!std::is_member_function_pointer<F>::value
+                        && !first_param_is_shared_ptr<F>::value,
+                        typename function_traits<F>::return_type>::type
 invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 	using arguments = typename function_traits<F>::arguments;
 	static_assert(std::tuple_size<arguments>::value > 0, "");
-	using class_type = typename std::decay<
-		typename std::tuple_element<0, arguments>::type>::type;
+	using class_type = 
+          typename std::decay<
+            typename std::tuple_element<0, arguments>::type>::type;
 
 	v8::Isolate* isolate = args.GetIsolate();
 	v8::Local<v8::Object> obj = args.This();
@@ -193,6 +226,26 @@ invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 		(*class_<class_type>::unwrap_object(isolate, obj),
 			std::forward<F>(get_external_data<F>(args.Data())), args);
 }
+
+template <typename F>
+typename std::enable_if<!std::is_member_function_pointer<F>::value
+                        && first_param_is_shared_ptr<F>::value,
+                        typename function_traits<F>::return_type>::type
+invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
+	using arguments = typename function_traits<F>::arguments;
+	static_assert(std::tuple_size<arguments>::value > 0, "");
+	using class_type = typename remove_shared_ptr_from_type
+          <typename std::decay<
+            typename std::tuple_element<0, arguments>::type>::type>::type;
+
+	v8::Isolate* isolate = args.GetIsolate();
+	v8::Local<v8::Object> obj = args.This();
+	auto sptr = class_<class_type>::unwrap_shared_object(isolate, obj);
+	return call_noncppmethod_from_v8_with_js_this
+		(sptr, std::forward<F>(get_external_data<F>(args.Data())), args);
+}
+
+
 
 template <typename F>
 typename std::enable_if<std::is_member_function_pointer<F>::value,

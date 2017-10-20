@@ -441,6 +441,38 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 		return res.result();
 		
 	}
+
+	template <typename T, typename F>
+	static result_type call_noncppmethod_with_js_this
+	(std::shared_ptr<T> obj, F&& func,
+	 v8::FunctionCallbackInfo<v8::Value> const& args) {
+
+		check_arg_count(num_v8_args, args);
+		
+		prepare_tuple_type prepare_tuple
+			(call_from_v8_cpp_param_type_info
+			 <typename std::tuple_element<ParamIndices,
+			 param_tuple_type>::type>::
+			 prepare(get_integer_sequence_value
+							 <ParamIndices, v8_function_arg_index_sequence>::value, args)...);
+
+		auto res = result_saver
+			([&obj,&func,&prepare_tuple,&args]() ->result_type
+			 { return func
+				 (obj, 
+					call_from_v8_cpp_param_type_info
+					<typename std::tuple_element<ParamIndices, param_tuple_type>::type>::
+					get_param
+					(get_integer_sequence_value
+					 <ParamIndices, v8_function_arg_index_sequence>::value, args,
+					 std::get<ParamIndices>(prepare_tuple)) ...);
+			 });
+
+		cleanup(prepare_tuple);
+
+		return res.result();
+		
+	}
 	
 };
 

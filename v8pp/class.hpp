@@ -555,6 +555,8 @@ public:
 		, dtor_(&default_delete_func<T>)
 		, object_size_func_(&default_object_size_func<T>)
 		, count_shared_as_externally_allocated_(false)
+		, automatically_wrap_missing_objects_as_external_(false)
+			
 	{
 		v8::Local<v8::FunctionTemplate> func = v8::FunctionTemplate::New(isolate_);
 		v8::Local<v8::FunctionTemplate> js_func = v8::FunctionTemplate::New(isolate_,
@@ -755,6 +757,10 @@ public:
 		count_shared_as_externally_allocated_ = c;
 	}
 
+	void set_automatically_wrap_missing_objects_as_external(bool a) {
+		automatically_wrap_missing_objects_as_external_ = a;
+	}
+	
 	bool get_count_shared_against_vm_size() const
 	{
 		return count_shared_as_externally_allocated_;
@@ -868,7 +874,12 @@ public:
 	
 	v8::Handle<v8::Object> find_object(T const* obj)
 	{
-		return class_info::find_object(isolate_, obj);
+		auto result = class_info::find_object(isolate_, obj);
+		if (result.IsEmpty() && automatically_wrap_missing_objects_as_external_) {
+			// XXX this is dodgy
+			return wrap_external_object(const_cast<T*>(obj));
+		}
+		return result;
 	}
 
 #if 0
@@ -901,6 +912,7 @@ private:
 	typedef std::function<size_t(const T*)> object_size_func_type;
 	object_size_func_type object_size_func_;
 	bool count_shared_as_externally_allocated_;
+	bool automatically_wrap_missing_objects_as_external_;
 	
 	v8::UniquePersistent<v8::FunctionTemplate> func_;
 	v8::UniquePersistent<v8::FunctionTemplate> js_func_;
@@ -980,6 +992,11 @@ public:
 		class_singleton_.set_count_shared_against_vm_size(c);
 		return *this;
 	}
+
+	class_& set_automatically_wrap_missing_objects_as_external(bool s) {
+		class_singleton_.set_automatically_wrap_missing_objects_as_external(s);
+		return *this;
+	}
 	
 	/// Inhert from C++ class U
 	template<typename U>
@@ -1011,7 +1028,6 @@ public:
 			wrap_function_template(isolate(), std::forward<Fun>(func)));
 		return *this;
 	}
-
 
 	/// Set class member function even if it's not a C++ member function
 	template <typename Function, typename Fun = typename std::decay<Function>::type>
