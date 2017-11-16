@@ -18,13 +18,6 @@
 #include "v8pp/throw_ex.hpp"
 #include "v8pp/utility.hpp"
 
-#if defined(V8_MAJOR_VERSION) && defined(V8_MINOR_VERSION) && defined(V8_BUILD_NUMBER) \
-      && (V8_MAJOR_VERSION > 4 || (V8_MAJOR_VERSION == 4 \
-      && (V8_MINOR_VERSION > 3 || (V8_MINOR_VERSION == 3 && V8_BUILD_NUMBER > 28))))
-#define V8_USE_WEAK_CB_INFO
-#endif
-
-
 namespace v8pp {
 
 namespace detail {
@@ -69,18 +62,13 @@ public:
 
 		v8::Local<v8::External> ext = v8::External::New(isolate, value);
 		value->pext_.Reset(isolate, ext);
-		value->pext_.SetWeak(value,
-#ifdef V8_USE_WEAK_CB_INFO
-			[](v8::WeakCallbackInfo<external_data> const& data)
-#else
-			[](v8::WeakCallbackData<v8::External, external_data> const& data)
-#endif
-		{
-			delete data.GetParameter();
-		}
-#ifdef V8_USE_WEAK_CB_INFO
-			, v8::WeakCallbackType::kParameter
-#endif
+		value->pext_.SetWeak
+			(value,
+			 [](v8::WeakCallbackInfo<external_data> const& data)
+			 {
+				 delete data.GetParameter();
+			 }
+			 , v8::WeakCallbackType::kParameter
 			);
 		return ext;
 	}
@@ -143,7 +131,7 @@ invoke(v8::FunctionCallbackInfo<v8::Value> const& args)
 }
 
 template<typename F>
-typename std::enable_if<std::is_member_function_pointer<F>::value,
+typename std::enable_if<is_nonconst_member_function_pointer<F>::value,
 	typename function_traits<F>::return_type>::type
 invoke(v8::FunctionCallbackInfo<v8::Value> const& args)
 {
@@ -155,6 +143,23 @@ invoke(v8::FunctionCallbackInfo<v8::Value> const& args)
 	v8::Isolate* isolate = args.GetIsolate();
 	v8::Local<v8::Object> obj = args.This();
 	return call_from_v8(*class_<class_type>::unwrap_object(isolate, obj),
+			std::forward<F>(get_external_data<F>(args.Data())), args);
+}
+
+  template<typename F>
+typename std::enable_if<is_const_member_function_pointer<F>::value,
+	typename function_traits<F>::return_type>::type
+invoke(v8::FunctionCallbackInfo<v8::Value> const& args)
+{
+	using arguments = typename function_traits<F>::arguments;
+	static_assert(std::tuple_size<arguments>::value > 0, "");
+	using class_type = typename std::decay<
+          typename std::tuple_element<0, arguments>::type>::type;
+
+	v8::Isolate* isolate = args.GetIsolate();
+	v8::Local<v8::Object> obj = args.This();
+	return call_from_v8(*class_<class_type>::unwrap_const_object
+											(isolate, obj),
 			std::forward<F>(get_external_data<F>(args.Data())), args);
 }
 
@@ -190,7 +195,11 @@ struct remove_shared_ptr_from_type<std::shared_ptr<T>> {
 template <typename T> struct is_shared_ptr: public std::false_type {};
 template <typename T> struct is_shared_ptr<std::shared_ptr<T>>:
     public std::true_type {};
-  
+
+template <typename T> struct is_const_shared_ptr: public std::false_type {};
+template <typename T> struct is_const_shared_ptr<std::shared_ptr<T const>>:
+	public std::true_type {};
+
 // Assumes we're only going to call this on functions with at least one argument
 template <typename F, typename Enable=void>
 struct first_param_is_shared_ptr: public std::false_type {};
@@ -207,7 +216,24 @@ struct first_param_is_shared_ptr
      ::type>
     ::value>
  ::type>: public std::true_type {};
-	
+
+template <typename F, typename Enable=void>
+struct first_param_is_const_shared_ptr: public std::false_type {};
+
+template <typename F>
+struct first_param_is_const_shared_ptr
+<F,
+ typename std::enable_if
+   <is_const_shared_ptr
+    <typename std::decay
+     <typename std::tuple_element
+      <0, typename function_traits<F>::arguments>
+      ::type>
+     ::type>
+    ::value>
+ ::type>: public std::true_type {};
+
+
 // Added
 template <typename F>
 typename std::enable_if<!std::is_member_function_pointer<F>::value
@@ -229,14 +255,16 @@ invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 
 template <typename F>
 typename std::enable_if<!std::is_member_function_pointer<F>::value
-                        && first_param_is_shared_ptr<F>::value,
+                        && first_param_is_shared_ptr<F>::value
+												&& !first_param_is_const_shared_ptr<F>::value,
                         typename function_traits<F>::return_type>::type
 invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 	using arguments = typename function_traits<F>::arguments;
 	static_assert(std::tuple_size<arguments>::value > 0, "");
-	using class_type = typename remove_shared_ptr_from_type
-          <typename std::decay<
-            typename std::tuple_element<0, arguments>::type>::type>::type;
+	using class_type = 
+		typename remove_shared_ptr_from_type
+		 <typename std::decay<
+			 typename std::tuple_element<0, arguments>::type>::type>::type;
 
 	v8::Isolate* isolate = args.GetIsolate();
 	v8::Local<v8::Object> obj = args.This();
@@ -245,7 +273,24 @@ invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 		(sptr, std::forward<F>(get_external_data<F>(args.Data())), args);
 }
 
-
+template <typename F>
+typename std::enable_if<!std::is_member_function_pointer<F>::value
+												&& first_param_is_const_shared_ptr<F>::value,
+                        typename function_traits<F>::return_type>::type
+invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
+	using arguments = typename function_traits<F>::arguments;
+	static_assert(std::tuple_size<arguments>::value > 0, "");
+	using class_type = 
+		typename std::remove_const<typename remove_shared_ptr_from_type
+		 <typename std::decay<
+			 typename std::tuple_element<0, arguments>::type>::type>::type>::type;
+	
+	v8::Isolate* isolate = args.GetIsolate();
+	v8::Local<v8::Object> obj = args.This();
+	auto sptr = class_<class_type>::unwrap_const_shared_object(isolate, obj);
+	return call_noncppmethod_from_v8_with_js_this
+		(sptr, std::forward<F>(get_external_data<F>(args.Data())), args);
+}
 
 template <typename F>
 typename std::enable_if<std::is_member_function_pointer<F>::value,

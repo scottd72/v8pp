@@ -3,6 +3,26 @@
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
+/*
+	Complete rewrite of v8pp's version, for a few related reasons: 
+  * Gets rid of all position dependence of arguments, other than 
+    "first argument becomes C++ 'this' when calling C++ methods".
+	* Allows users to bind C++ methods with parameters that don't correspond
+    directly to JS arguments and/or require some setup before they're passed
+    to C++ and/or require cleanup after the C++ method is complete. 
+    (Example: bind C++ code that uses ErrorTrace* function parameters to 
+    notify of errors instead of throwing C++ exceptions. An ErrorTrace can 
+    be locally allocated, a pointer to it passed in to the wrapped method/
+    function, and then when the call is complete the "cleanup" code can 
+    check whether an error was recorded in the ErrorTrace and if so throw 
+    an exception.) This can all be done by providing a specialization of
+    call_from_v8_cpp_param_type_info below. (This is also now how 
+    C++ arguments corresponding to the v8 Isolate are now handled, thus
+    eliminating the clunky old position-dependent "call_traits" stuff.)
+	* Allows C++ functions that aren't methods to be bound as JS methods.
+
+ */
+
 #ifndef V8PP_CALL_FROM_V8_NEW_HPP_INCLUDED
 #define V8PP_CALL_FROM_V8_NEW_HPP_INCLUDED
 
@@ -17,10 +37,11 @@ namespace v8pp {
 
 /*
   Used for two mostly-unrelated things below:
-  (1) storing "nothing" when we don't need special handling for
-      a particular argument type (probably actually requires one byte
-      of dummy storage in most contexts, because C++)
-  (2) working around syntactic limitations on parameter unpacking
+  (1) Storing "nothing" when we don't need special handling for
+      a particular argument type. (Probably actually requires one byte
+      of dummy storage in most contexts, because C++ demands every element
+      of a structure/array has a unique byte address, or something like that.)
+  (2) Working around syntactic limitations on parameter unpacking
       via the use of initializer lists for a dummy constructor
 */
 struct empty {
@@ -37,8 +58,6 @@ struct call_from_v8_cpp_param_type_info {
 	
 	using preparation_type = empty;
 
-	//enum class special_v8_arg_indices { THIS = -777 };
-	
 	static const int v8_param_index_advance = 1;
 	
 	static preparation_type prepare
@@ -147,6 +166,7 @@ template <size_t N, typename T, T first, T... rest>
 struct get_integer_sequence_value<N, integer_sequence<T, first, rest...>>:
 		get_integer_sequence_value<N-1, integer_sequence<T, rest...>> {};
 
+/*    
 template <typename IntegerSequence>
 struct integer_sequence_tail;
 
@@ -162,7 +182,8 @@ template <typename T, T to_add, T...values>
 struct integer_sequence_element_adder<integer_sequence<T, values...>, to_add> {
 	using type = integer_sequence<T, values+to_add ...>;
 };
-
+*/
+    
 /*
   v8_arg_index_computer: based on the argument types of a function,
   computes an index sequence where the nth element of the sequence tells
@@ -215,12 +236,6 @@ struct v8_arg_index_computer<num_v8_args_so_far_,
 	
 	using v8_args_index_sequence =
 		 typename recursive_type::v8_args_index_sequence;
-	/*v8_arg_index_computer
-		<num_v8_args_so_far,
-		 new_v8_args_sequence_so_far,
-		 next_next_real_v8_arg_index,
-		 std::tuple<fn_remaining_arg_types...>>::
-		 v8_args_index_sequence;*/
 
 	static const size_t num_v8_args = recursive_type::num_v8_args;
 	
@@ -296,23 +311,6 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 		 <typename std::tuple_element<ParamIndices,
 																	param_tuple_type>::type>::
 		 preparation_type ...>;
-
-	/*
-		A couple of reasons we factor this "cleanup_manager" part out:
-		(1) reduce code duplication (duh); even though it's only one statement,
-        it's a pretty gnarly hacky statement
-		(2) make it easier to handle "void" return types by making it so we
- 		    can directly return the result, instead of having to store it if and
- 			  only if it's not void, calling the cleanup code, and then returning
-			  the value if and only if it's not void (thus requiring two different
-        template specializations).
-
-    	  C++'s handling of "void" can kiss my tuckus.
-
-		The "empty" funny business is a way to get around syntactic limitations
-    on parameter unpacking by using an initializer list in a dummy constructor.
-
-	 */
 
   static void cleanup(prepare_tuple_type& pt) {
 		empty

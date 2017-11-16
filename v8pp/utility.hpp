@@ -11,6 +11,7 @@
 
 #include <tuple>
 #include <type_traits>
+#include <assert.h>
 
 namespace v8pp { namespace detail {
 
@@ -237,6 +238,22 @@ typename function_traits<F>::return_type apply(F&& f, Args&&... args)
 	return std::forward<F>(f)(std::forward<Args>(args)...);
 }
 
+// Added by Scott Davies
+template <typename F, typename Enable=void>
+struct is_const_member_function_pointer: std::false_type {};
+
+template <typename C, typename R, typename ...Args>
+struct is_const_member_function_pointer<R(C::*)(Args...) const> :
+	std::true_type {};
+
+template <typename F, typename Enable=void>
+struct is_nonconst_member_function_pointer: std::false_type {};
+
+template <typename C, typename R, typename ...Args>
+struct is_nonconst_member_function_pointer<R(C::*)(Args...)> :
+	std::true_type {};
+
+
 /// Type information for custom RTTI
 class type_info
 {
@@ -277,6 +294,16 @@ type_info type_id()
 #define V8PP_PRETTY_FUNCTION_LEN (sizeof(V8PP_PRETTY_FUNCTION) - 1)
 #define V8PP_PRETTY_FUNCTION_PREFIX_LEN (sizeof(V8PP_PRETTY_FUNCTION_PREFIX) - 1)
 #define V8PP_PRETTY_FUNCTION_SUFFIX_LEN (sizeof(V8PP_PRETTY_FUNCTION_SUFFIX) - 1)
+
+	// assertions added by Scott Davies because holy crap, people,
+	// compiler-dependent details can change
+  assert(V8PP_PRETTY_FUNCTION_LEN >
+				 V8PP_PRETTY_FUNCTION_PREFIX_LEN + V8PP_PRETTY_FUNCTION_SUFFIX_LEN);
+	assert(!strncmp(V8PP_PRETTY_FUNCTION, V8PP_PRETTY_FUNCTION_PREFIX,
+		V8PP_PRETTY_FUNCTION_PREFIX_LEN));
+	assert(!strncmp(V8PP_PRETTY_FUNCTION + V8PP_PRETTY_FUNCTION_LEN -
+									V8PP_PRETTY_FUNCTION_SUFFIX_LEN, V8PP_PRETTY_FUNCTION_SUFFIX,
+									V8PP_PRETTY_FUNCTION_SUFFIX_LEN));
 
 	return type_info(V8PP_PRETTY_FUNCTION + V8PP_PRETTY_FUNCTION_PREFIX_LEN,
 		V8PP_PRETTY_FUNCTION_LEN - V8PP_PRETTY_FUNCTION_PREFIX_LEN - V8PP_PRETTY_FUNCTION_SUFFIX_LEN);

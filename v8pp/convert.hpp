@@ -529,6 +529,18 @@ struct is_wrapped_class<T> : std::is_class<T> {};
 template <typename T>
 struct is_wrapped_class<std::shared_ptr<T>>: std::false_type{};
 
+template <typename T>
+struct is_wrapped_class<T*>: std::false_type{};
+
+template <typename T>
+struct is_wrapped_class<T const*>: std::false_type{};
+
+template <typename T>
+struct is_wrapped_class<T&>: std::false_type{};
+
+template <typename T>
+struct is_wrapped_class<T const&>: std::false_type{};
+
 template<typename T>
 struct is_wrapped_class<v8::Handle<T>, typename std::enable_if<
 	!std::is_same<v8::Handle<T>, v8::Local<T>>::value>::type> : std::false_type{};
@@ -552,7 +564,9 @@ template<typename Key, typename Value, typename Less, typename Alloc>
 struct is_wrapped_class<std::map<Key, Value, Less, Alloc>> : std::false_type {};
 
 template<typename T>
-struct convert<T*, typename std::enable_if<is_wrapped_class<T>::value>::type>
+struct convert<T*,
+							 typename std::enable_if<is_wrapped_class<T>::value &&
+																			 !std::is_const<T>::value>::type>
 {
 	using from_type = T*;
 	using to_type = v8::Handle<v8::Object>;
@@ -577,6 +591,35 @@ struct convert<T*, typename std::enable_if<is_wrapped_class<T>::value>::type>
 		return class_<class_type>::find_object(isolate, value);
 	}
 };
+
+template<typename T>
+struct convert<T const*,
+							 typename std::enable_if<is_wrapped_class<T>::value>::type>
+{
+	using from_type = T const*;
+	using to_type = v8::Handle<v8::Object>;
+	using class_type = typename std::remove_cv<T>::type;
+
+	static bool is_valid(v8::Isolate*, v8::Handle<v8::Value> value)
+	{
+		return !value.IsEmpty() && value->IsObject();
+	}
+
+	static from_type from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value)
+	{
+		if (!is_valid(isolate, value))
+		{
+			return nullptr;
+		}
+		return class_<class_type>::unwrap_const_object(isolate, value);
+	}
+
+	static to_type to_v8(v8::Isolate* isolate, T const* value)
+	{
+		return class_<class_type>::find_object(isolate, value);
+	}
+};
+
 
 template<typename T>
 struct convert<T, typename std::enable_if<is_wrapped_class<T>::value>::type>
@@ -608,6 +651,19 @@ struct convert<T, typename std::enable_if<is_wrapped_class<T>::value>::type>
 	}
 };
 
+/*
+template<typename T>
+struct convert<const T,
+							 typename std::enable_if<is_wrapped_class<T>::value>::type> :
+	public convert<T> {};
+*/
+/*
+template<typename T>
+struct convert<const T,
+							 typename std::enable_if<is_wrapped_class<T>::value>::type> {
+};
+*/
+
 template <typename T>
 struct convert<std::shared_ptr<T>, typename std::enable_if<is_wrapped_class<T>::value>::type>
 {
@@ -635,13 +691,47 @@ struct convert<std::shared_ptr<T>, typename std::enable_if<is_wrapped_class<T>::
 	}
 	static to_type to_v8(v8::Isolate* isolate, from_type value)
 	{
-		v8::Handle<v8::Object> result =
-			class_<class_type>::find_object(isolate, value.get());
-		if (!result.IsEmpty()) { return result; }
-		return class_<class_type>::wrap_shared_object(isolate, value);
-		//return class_<class_type>::find_object(isolate, value.get());
+		return class_<class_type>::find_shared_object(isolate, value);
 	}
 };
+
+template <typename T>
+struct convert<std::shared_ptr<T const>, typename std::enable_if<is_wrapped_class<T>::value>::type>
+{
+	using from_type = std::shared_ptr<T const>;
+	using to_type = v8::Handle<v8::Object>;
+	using class_type = T;
+
+	static bool is_valid(v8::Isolate* isolate, v8::Handle<v8::Value> value)
+	{
+		return convert<class_type*>::is_valid(isolate, value);
+	}
+
+	static from_type from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value)
+	{
+		if (!is_valid(isolate, value))
+		{
+			throw std::invalid_argument("expected Object");
+		}
+		auto result = class_<class_type>::unwrap_const_shared_object
+			(isolate, value);
+		if (result.get() == nullptr)
+		{
+			throw std::runtime_error("expected C++ wrapped object with shared_ptr");
+		}
+		return result;
+	}
+	static to_type to_v8(v8::Isolate* isolate, from_type value)
+	{
+		return class_<class_type>::find_shared_object(isolate, value);
+	}
+};
+
+/*
+template<typename T>
+struct convert<T const*, typename std::enable_if<is_wrapped_class<T>::value>::type> {
+};
+*/	
 
 template<typename T>
 struct convert<T&> : convert<T> {};

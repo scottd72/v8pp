@@ -6,7 +6,9 @@
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
-// Extensive modifications and additions written by Scott Davies.
+// Extensive modifications and additions written by Scott Davies (distributed
+// under the same license).
+
 #ifndef V8PP_CLASS_HPP_INCLUDED
 #define V8PP_CLASS_HPP_INCLUDED
 
@@ -16,6 +18,7 @@
 #include <memory>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "v8pp/config.hpp"
@@ -80,14 +83,8 @@ inline std::string pointer_str(void const* ptr)
 class class_info
 {
 public:
-	explicit class_info(type_info const& type) : type_(type) {}
-	class_info(class_info const&) = delete;
-	class_info& operator=(class_info const&) = delete;
-	virtual ~class_info() = default;
 
-	type_info const& type() const { return type_; }
-
-	using cast_function = void* (*)(void* ptr);
+	using cast_function = void const* (*)(void const* ptr);
 
 	// Manages a void* which is actually a shared_ptr<T>*.
 	// Fortunately, the destruction function saved in it knows what T is,
@@ -98,7 +95,50 @@ public:
 	using managed_shared_ptr_ptr_cast_function =
 		managed_shared_ptr_ptr (*) (const managed_shared_ptr_ptr&);
 	
-	void add_base(class_info* info, cast_function cast, managed_shared_ptr_ptr_cast_function spcast)
+	struct object_record
+	{
+		persistent<v8::Object> v8object;
+		managed_shared_ptr_ptr shptr;
+		bool can_modify: 1;
+		bool destroy: 1;
+		bool count_against_vm_size: 1;
+
+		object_record(persistent<v8::Object>&& v8o,
+									bool can_mod,
+									bool desty,
+									bool count_against_vms):
+			v8object(std::move(v8o)),
+			can_modify(can_mod),
+			destroy(desty),
+			count_against_vm_size(count_against_vms)
+		{;}
+
+		object_record(persistent<v8::Object>&& v8o,
+									managed_shared_ptr_ptr&& shp,
+									bool can_mod,
+									bool count_against_vm_sz):
+			v8object(std::move(v8o)),
+			shptr(std::move(shp)),
+			can_modify(can_mod), 
+			destroy(false),
+			count_against_vm_size(count_against_vm_sz)
+		{;}
+
+		bool has_shared_ptr() const { return shptr != nullptr; }
+		
+	};
+	
+	explicit class_info(type_info const& type) : type_(type) {}
+	class_info(class_info const&) = delete;
+	class_info& operator=(class_info const&) = delete;
+	virtual ~class_info() = default;
+
+	type_info const& type() const { return type_; }
+
+	void add_base(class_info* info,
+								cast_function ucast,
+								cast_function dcast,
+								managed_shared_ptr_ptr_cast_function spucast)
 	{
 		auto it = std::find_if(bases_.begin(), bases_.end(),
 			[info](base_class_info const& base) { return base.info == info; });
@@ -108,11 +148,13 @@ public:
 			throw std::runtime_error(class_name(type_)
 				+ " is already inherited from " + class_name(info->type_));
 		}
-		bases_.emplace_back(info, cast, spcast);
-		info->derivatives_.emplace_back(this);
+		bases_.emplace_back(info, ucast, spucast);
+		info->derivatives_.emplace_back(this, dcast);
 	}
 
-	bool cast(void*& ptr, type_info const& type) const
+	// ptr is assumed to be a pointer to an object of "our" type.
+	// We will try to cast it to a pointer to a base class of the given type.
+	bool upcast(void const*& ptr, type_info const& type) const
 	{
 		if (type == type_ || !ptr)
 		{
@@ -124,7 +166,7 @@ public:
 		{
 			if (base.info->type_ == type)
 			{
-				ptr = base.cast(ptr);
+				ptr = base.upcast(ptr);
 				return true;
 			}
 		}
@@ -132,8 +174,12 @@ public:
 		// slower way - walk on hierarhy
 		for (base_class_info const& base : bases_)
 		{
-			void* p = base.cast(ptr);
-			if (base.info->cast(p, type))
+			// Manufacture a pointer of type Base*
+			void const* p = base.upcast(ptr); 
+
+			// See if we can translate that into a pointer of the target
+			// even-more-basic type
+			if (base.info->upcast(p, type))
 			{
 				ptr = p;
 				return true;
@@ -143,50 +189,44 @@ public:
 		return false;
 	}
 
-	managed_shared_ptr_ptr managed_shared_ptr_ptr_cast
+	bool upcast(void*& ptr, type_info const& type) const {
+		void const* cptr(ptr);
+		if (upcast(cptr, type)) {
+			ptr = const_cast<void*>(cptr);
+			return true;
+		}
+		return false;
+	}
+	
+	managed_shared_ptr_ptr managed_shared_ptr_ptr_upcast
 	(managed_shared_ptr_ptr ptr, type_info const& type) const
 	{
 		if (type == type_ || !ptr) { return ptr; }
 		for (base_class_info const& base: bases_)
 		{
-			managed_shared_ptr_ptr base_ptr = base.managed_shared_ptr_ptr_cast(ptr);
+			managed_shared_ptr_ptr base_ptr = base.managed_shared_ptr_ptr_upcast(ptr);
 			assert(base_ptr != nullptr);
-			managed_shared_ptr_ptr result = base.info->managed_shared_ptr_ptr_cast(base_ptr, type);
+			managed_shared_ptr_ptr result =
+				base.info->managed_shared_ptr_ptr_upcast(base_ptr, type);
 			if (result != nullptr) { return result; }
 		}
 		return nullptr;
 	}
 	
-#if 0
-	template<typename T>
-	void add_object(T* object, persistent<v8::Object>&& handle)
-	{
-		auto it = objects_.find(object);
-		if (it != objects_.end())
-		{
-			//assert(false && "duplicate object");
-			throw std::runtime_error(class_name(type())
-				+ " duplicate object " + pointer_str(object));
-		}
-		objects_.emplace(object, std::move(handle));
-	}
-#endif
-
 	template <typename T>
 	void add_object(v8::Isolate* isolate,
 									T* object,
 									persistent<v8::Object>&& handle,
+									bool can_modify,
 									bool claim_ownership,
 									bool count_against_vm_size,
 									const std::function<size_t(const T*)>& obj_size_func) {
-		auto it = object_records_.find(object);
-		if (it != object_records_.end())
-		{
-			//assert(false && "duplicate object");
-			throw std::runtime_error(class_name(type())
-				+ " duplicate object " + pointer_str(object));
-		}
-		object_record orec(std::move(handle), claim_ownership,
+		// exception-throwing checks moved to class_singleton so they could
+		// check to make sure no base class 
+		assert(object_records_.find(object) == object_records_.end());
+		object_record orec(std::move(handle),
+											 can_modify,
+											 claim_ownership,
 											 count_against_vm_size);
 		object_records_.emplace(object, std::move(orec));
 		if (count_against_vm_size) {
@@ -200,18 +240,13 @@ public:
 	(v8::Isolate* isolate,
 	 std::shared_ptr<T> object,
 	 persistent<v8::Object>&& handle,
+	 bool can_modify,
 	 bool count_against_vm_size,
 	 const std::function<size_t(const T*)>& obj_size_func)
 	{
-		auto it = object_records_.find(object.get());
-		if (it != object_records_.end())
-		{
-			throw std::runtime_error(class_name(type())
-															 + " duplicate object " + pointer_str(object.get()));
-		}
-
+		assert(object_records_.find(object.get()) == object_records_.end());
 		managed_shared_ptr_ptr mspp(new std::shared_ptr<T>(object));
-		object_record orec(std::move(handle), std::move(mspp),
+		object_record orec(std::move(handle), std::move(mspp), can_modify,
 											 count_against_vm_size);
 		object_records_.emplace(object.get(), std::move(orec));
 		if (count_against_vm_size) {
@@ -226,35 +261,12 @@ public:
 		return it->second.has_shared_ptr();
 	}
 
-#if 0	
-	template<typename T>
-	void remove_object(v8::Isolate* isolate, T* object, void (*destroy)(v8::Isolate* isolate, T* obj) = nullptr)
-	{
-		auto it = objects_.find(object);
-		assert(objects_.find(object) != objects_.end() && "no object");
-		if (it != objects_.end())
-		{
-			if (!it->second.IsNearDeath())
-			{
-				// remove pointer to wrapped  C++ object from V8 Object internal field
-				// to disable unwrapping for this V8 Object
-				assert(to_local(isolate, it->second)->GetAlignedPointerFromInternalField(0) == object);
-				to_local(isolate, it->second)->SetAlignedPointerInInternalField(0, nullptr);
-			}
-			it->second.Reset();
-			bool has_shared_ptr = has_shared_ptr_for_object(object);
-			if (destroy && !has_shared_ptr)
-			{
-				destroy(isolate, object);
-			}
-			objects_.erase(it);
-			if (has_shared_ptr) {
-				shared_ptrs_.erase(object);
-			}
-		}
+	bool can_modify_object(void* obj) {
+		auto it = object_records_.find(obj);
+		if (it == object_records_.end()) { return false; }
+		return it->second.can_modify;
 	}
-#endif
-
+	
 	template <typename T>
 	void remove_object(v8::Isolate* isolate,
 										 T* object,
@@ -282,40 +294,24 @@ public:
 					(-static_cast<int64_t>(sz));
 			}
 			bool has_shared_ptr = it->second.has_shared_ptr();
-			if (!has_shared_ptr && (destroy_func != nullptr)) {
+			if (!has_shared_ptr && (destroy_func != nullptr) && it->second.destroy) {
 				destroy_func(object);
 			}
 			object_records_.erase(object);
 		}
 	}
 
-#if 0
-	template<typename T>
-	void remove_objects(v8::Isolate* isolate, void (*destroy)(v8::Isolate* isolate, T* obj))
-	{
-		for (auto& object_rec : objects_)
-		{
-			bool has_shared_ptr = has_shared_ptr_for_object(object_rec.first);
-			object_rec.second.Reset();
-			if (destroy && !has_shared_ptr) 
-			{
-				destroy(isolate, static_cast<T*>(object_rec.first));
-			}
-		}
-		objects_.clear();
-		shared_ptrs_.clear();
-	}
-#endif
-
 	template<typename T>
 	void remove_objects(v8::Isolate* isolate,
 											const std::function<void(T*)>& destroy_func,
-											const std::function<size_t(const T*)>& obj_size_func) {
+											const std::function<size_t(const T*)>& obj_size_func)
+	{
 		for (auto& object_rec: object_records_)
 		{
 			bool has_shared_ptr = object_rec.second.has_shared_ptr();
 			object_rec.second.v8object.Reset();
-			T* obj = static_cast<T*>(object_rec.first);			
+			T* obj = //const_cast<T*>(static_cast<T*>(object_rec.first));
+				static_cast<T*>(const_cast<void*>(object_rec.first));
 			if (object_rec.second.count_against_vm_size &&
 					(obj_size_func != nullptr))
 			{
@@ -323,97 +319,139 @@ public:
 				isolate->AdjustAmountOfExternalAllocatedMemory
 					(-static_cast<int64_t>(sz));
 			}
-			if (!has_shared_ptr && (destroy_func != nullptr))
+			if (!has_shared_ptr && (destroy_func != nullptr) &&
+					object_rec.second.destroy)
 			{
 				destroy_func(obj);
 			}
 		}
-		
 	}
 
-	v8::Local<v8::Object> find_object(v8::Isolate* isolate, void const* object) const
-	{
+	const object_record* find_object_record
+	(void const* object) const {
 		auto it = object_records_.find(const_cast<void*>(object));
-		if (it != object_records_.end())
-		{
-			return to_local(isolate, it->second.v8object);
+		if (it != object_records_.end()) {
+			return &it->second;
 		}
-
-		v8::Local<v8::Object> result;
-		for (class_info const* info : derivatives_)
-		{
-			result = info->find_object(isolate, object);
-			if (!result.IsEmpty()) break;
-		}
-		return result;
+		return nullptr;
 	}
 
-	managed_shared_ptr_ptr find_managed_shared_ptr_ptr(void const* object) const
+	// NOTE: this only works if the pointer you pass in is already
+	// the "maximally derived" version of the pointer! If you start with a
+	// pointer to a base class, this function will NOT necessarily find the
+	// right record in the derived class records, because it doesn't do any
+	// pointer adjustements!
+	const object_record* find_object_record_searching_derivatives
+	(void const* object) const
 	{
 		auto it = object_records_.find(const_cast<void*>(object));
-		if (it != object_records_.end())
-  	{
-			return it->second.shptr;
+		if (it != object_records_.end()) {
+			return &it->second;
 		}
-		for (class_info const* info: derivatives_)
-		{
-			auto result = info->find_managed_shared_ptr_ptr(object);
+		for (derived_class_info const& dinfo: derivatives_) {
+			const object_record* result = dinfo.info->find_object_record(object);
 			if (result != nullptr) { return result; }
 		}
 		return nullptr;
 	}
+
+	v8::Local<v8::Object> find_object
+	(v8::Isolate* isolate, void const* object) const
+	{
+		const object_record* orec = find_object_record_searching_derivatives
+			(object);
+		if (orec != nullptr) {
+			return to_local(isolate, orec->v8object);
+		}
+		return v8::Local<v8::Object>();
+	}
 	
-private:
+	managed_shared_ptr_ptr find_managed_shared_ptr_ptr(void const* object) const
+	{
+		const object_record* orec =
+			find_object_record_searching_derivatives(object);
+		if (orec != nullptr) {
+			return orec->shptr;
+		}
+		return nullptr;
+	}
+
+	// Simple depth-first search through inheritance graph
+	bool pointer_already_wrapped_helper
+	(void const* object,
+	 std::unordered_set<class_info const*>& already_visited) const {
+		if (already_visited.find(this) != already_visited.end()) {
+			return false;
+		}
+		already_visited.insert(this);
+		auto it = object_records_.find(const_cast<void*>(object));
+		if (it != object_records_.end()) {
+			return true;
+		}
+		for (base_class_info const& base: bases_) {
+			void const* castobj = base.upcast(object);
+			if (base.info->pointer_already_wrapped_helper
+					(castobj, already_visited)) {
+				return true;
+			}
+		}
+		for (derived_class_info const& deriv: derivatives_) {
+			void const* castobj = deriv.downcast(object);
+			if (deriv.info->pointer_already_wrapped_helper
+					(castobj, already_visited)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool pointer_already_wrapped(void const* object) const {
+		std::unordered_set<class_info const*> already_visited;
+		return pointer_already_wrapped_helper(object, already_visited);
+	}
+		
+protected:
 	struct base_class_info
 	{
 		class_info* info;
-		cast_function cast;
-		managed_shared_ptr_ptr_cast_function managed_shared_ptr_ptr_cast;
 
-		base_class_info(class_info* info, cast_function cast, managed_shared_ptr_ptr_cast_function spcast)
+		// This function takes a pointer to our type and transforms it to
+		// a pointer of the base's type
+		cast_function upcast;
+
+		managed_shared_ptr_ptr_cast_function managed_shared_ptr_ptr_upcast;
+
+		base_class_info(class_info* info, cast_function upcst,
+										managed_shared_ptr_ptr_cast_function spupcast)
 			: info(info)
-			, cast(cast)
-			, managed_shared_ptr_ptr_cast(spcast)
+			, upcast(upcst)
+			, managed_shared_ptr_ptr_upcast(spupcast)
 		{
 		}
 	};
 
-	type_info const type_;
-	std::vector<base_class_info> bases_;
-	std::vector<class_info*> derivatives_;
-
-	struct object_record
+	struct derived_class_info
 	{
-		persistent<v8::Object> v8object;
-		managed_shared_ptr_ptr shptr;
-		bool destroy: 1;
-		bool count_against_vm_size: 1;
+		class_info* info;
 
-		object_record(persistent<v8::Object>&& v8o, bool desty,
-									bool count_against_vms):
-			v8object(std::move(v8o)),
-			destroy(desty),
-			count_against_vm_size(count_against_vms)
-		{;}
+		// This function takes a pointer to our type and casts it to a pointer
+		// of the derived type
+		cast_function downcast;
 
-		object_record(persistent<v8::Object>&& v8o,
-									managed_shared_ptr_ptr&& shp,
-									bool count_against_vm_sz):
-			v8object(std::move(v8o)),
-			shptr(std::move(shp)),
-			destroy(false),
-			count_against_vm_size(count_against_vm_sz)
-		{;}
-
-		bool has_shared_ptr() const { return shptr != nullptr; }
-		
+		derived_class_info(class_info* info, cast_function downcst)
+			:info(info)
+			, downcast(downcst)
+		{
+		}
 	};
 	
-	//std::unordered_map<void*, persistent<v8::Object>> objects_;
-	//std::unordered_map<void*, managed_shared_ptr_ptr> shared_ptrs_;
-		std::unordered_map<void*, object_record> object_records_;
+	type_info const type_;
+	std::vector<base_class_info> bases_;
+	std::vector<derived_class_info> derivatives_;
+
+	std::unordered_map<void const*, object_record> object_records_;
 	
-};
+}; // end class_info
 
 template<typename T>
 class class_singleton;
@@ -555,7 +593,7 @@ public:
 		, dtor_(&default_delete_func<T>)
 		, object_size_func_(&default_object_size_func<T>)
 		, count_shared_as_externally_allocated_(false)
-		, automatically_wrap_missing_objects_as_external_(false)
+		, throw_exception_when_object_not_found_(true)
 			
 	{
 		v8::Local<v8::FunctionTemplate> func = v8::FunctionTemplate::New(isolate_);
@@ -591,9 +629,22 @@ public:
 		remove_objects();
 	}
 
-	v8::Handle<v8::Object> wrap(T* object, bool claim_ownership,
+	
+	bool object_already_wrapped(T const* object) const {
+		return pointer_already_wrapped(object);
+	}
+	
+	v8::Handle<v8::Object> wrap(T* object,
+															bool can_modify,
+															bool claim_ownership,
 															bool count_against_vm_size)
 	{
+
+		if (object_already_wrapped(object)) {
+			throw std::runtime_error
+				(type().name() + " (or super/subclass) already wrapped: " +
+				 pointer_str(object));
+		}
 		v8::EscapableHandleScope scope(isolate_);
 
 		v8::Local<v8::Object> obj =
@@ -614,8 +665,9 @@ public:
 			 }
 			 , v8::WeakCallbackType::kParameter
 			 );
-
+		
 		class_info::add_object(isolate_, object, std::move(pobj),
+													 can_modify,
 													 claim_ownership,
 													 count_against_vm_size,
 													 object_size_func_);
@@ -624,8 +676,16 @@ public:
 	}
 
 	v8::Handle<v8::Object> wrap_shared(std::shared_ptr<T> object,
+																		 bool can_modify,
 																		 bool count_against_vm_size)
 	{
+
+		if (object_already_wrapped(object.get())) {
+			throw std::runtime_error
+				(type().name() + " (or super/subclass) already wrapped: " +
+				 pointer_str(object.get()));
+		}
+		
 		v8::EscapableHandleScope scope(isolate_);
 
 		v8::Local<v8::Object> obj = class_function_template()->GetFunction()->NewInstance();
@@ -649,6 +709,7 @@ public:
 			 );
 			 
 		class_info::add_shared_object(isolate_, object, std::move(pobj),
+																	can_modify,
 																	count_against_vm_size,
 																	object_size_func_);
 		return scope.Escape(obj);
@@ -666,24 +727,6 @@ public:
 	{
 		return to_local(isolate_, js_func_.IsEmpty()? func_ : js_func_);
 	}
-
-#if 0
-	template<typename ...Args>
-	void ctor()
-	{
-		ctor_ = [](v8::FunctionCallbackInfo<v8::Value> const& args)
-		{
-			using ctor_type = T* (*)(v8::Isolate* isolate, Args...);
-			return call_from_v8(static_cast<ctor_type>(&factory<T>::create), args);
-		};
-		shared_ctor_ = [](v8::FunctionCallbackInfo<v8::Value> const& args)
-		{
-			using ctor_type = std::shared_ptr<T> (*)(Args...);
-			return call_from_v8(static_cast<ctor_type>(&shared_object_factory<T>::create), args);
-		};
-		class_function_template()->Inherit(js_function_template());
-	}
-#endif
 
 	// Uses T constructor with given type signature 
 	template <typename ...Args>
@@ -757,13 +800,17 @@ public:
 		count_shared_as_externally_allocated_ = c;
 	}
 
-	void set_automatically_wrap_missing_objects_as_external(bool a) {
-		automatically_wrap_missing_objects_as_external_ = a;
-	}
-	
 	bool get_count_shared_against_vm_size() const
 	{
 		return count_shared_as_externally_allocated_;
+	}
+
+	void set_throw_exception_when_object_not_found(bool t) {
+		throw_exception_when_object_not_found_ = t;
+	}
+	
+	void get_throw_exception_when_object_not_found() const {
+		return throw_exception_when_object_not_found_;
 	}
 	
 	template<typename U>
@@ -771,10 +818,14 @@ public:
 	{
 		class_singleton<U>* base = &class_singletons::find_class<U>(isolate_);
 		add_base(base,
-			[](void* ptr) -> void*
+			[](void const* ptr) -> void const*
 			{
-				return static_cast<U*>(static_cast<T*>(ptr));
+				return static_cast<U const*>(static_cast<T const*>(ptr));
 			},
+			[](void const* ptr) -> void const*
+			{
+			  return static_cast<T const*>(static_cast<U const*>(ptr));
+  	  },
 			[](const managed_shared_ptr_ptr& p) -> managed_shared_ptr_ptr
 			{
 				std::shared_ptr<T>* tp = static_cast<std::shared_ptr<T>*>(p.get());
@@ -784,44 +835,80 @@ public:
 		js_function_template()->Inherit(base->class_function_template());
 	}
 
+	template<typename U>
+	void virtually_inherit()
+	{
+		class_singleton<U>* base = &class_singletons::find_class<U>(isolate_);
+		add_base(base,
+			[](void const* ptr) -> void const*
+			{
+				return static_cast<U const*>(static_cast<T const*>(ptr));
+			},
+			[](void const* ptr) -> void const*
+			{
+			  return dynamic_cast<T const*>(static_cast<U const*>(ptr));
+  	  },
+			[](const managed_shared_ptr_ptr& p) -> managed_shared_ptr_ptr
+			{
+				std::shared_ptr<T>* tp = static_cast<std::shared_ptr<T>*>(p.get());
+				std::shared_ptr<U>* up = new std::shared_ptr<U>(*tp);
+				return managed_shared_ptr_ptr(up);
+			});
+		js_function_template()->Inherit(base->class_function_template());
+	}
+	
 	v8::Handle<v8::Object> wrap_external_object(T* object)
 	{
-		return wrap(object, false, false);
+		return wrap(object, true, false, false);
 	}
-
+	v8::Handle<v8::Object> wrap_external_const_object(T const* object)
+	{
+		return wrap(const_cast<T*>(object), false, false, false);
+	}
 	v8::Handle<v8::Object> wrap_object(T* object)
 	{
-		return wrap(object, true, true);
+		return wrap(object, true, true, true);
 	}
-
+	v8::Handle<v8::Object> wrap_const_object(T const* object)
+	{
+		return wrap(const_cast<T*>(object), false, true, true);
+	}
+	
 	v8::Handle<v8::Object> wrap_object(v8::FunctionCallbackInfo<v8::Value> const& args)
 	{
 
 		if (ctor_) {
 			return wrap_object(ctor_(args));
 		} else if (shared_ctor_) {
-			return wrap_shared(shared_ctor_(args),
+			return wrap_shared(shared_ctor_(args), true,
 												 count_shared_as_externally_allocated_);
 		} else {
 			throw std::runtime_error(class_name(type()) + " has no constructor");
 		}
-#if 0
-		if (!ctor_)
-		{
-			//assert(false && "create not allowed");
-			throw std::runtime_error(class_name(type()) + " has no constructor");
-		}
-		if (construct_using_shared_ptr_)
-		{
-			return wrap_shared(shared_ctor_(args));
-		}
-		else
-		{
-			return wrap_object(ctor_(args));
-		}
-#endif
 	}
 
+  T const* unwrap_const_object(v8::Local<v8::Value> value)
+	{
+		v8::HandleScope scope(isolate_);
+
+		while (value->IsObject())
+		{
+			v8::Handle<v8::Object> obj = value->ToObject();
+			if (obj->InternalFieldCount() == 2)
+			{
+				void* ptr = obj->GetAlignedPointerFromInternalField(0);
+				class_info* info = static_cast<class_info*>(obj->GetAlignedPointerFromInternalField(1));
+				assert(info->find_object_record(ptr) != nullptr); // added by SD
+				if (info && info->upcast(ptr, type()))
+				{
+					return static_cast<T const*>(ptr);
+				}
+			}
+			value = obj->GetPrototype();
+		}
+		return nullptr;
+	}
+	
 	T* unwrap_object(v8::Local<v8::Value> value)
 	{
 		v8::HandleScope scope(isolate_);
@@ -833,9 +920,18 @@ public:
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
 				class_info* info = static_cast<class_info*>(obj->GetAlignedPointerFromInternalField(1));
-				if (info && info->cast(ptr, type()))
+				const object_record* orec = info->find_object_record(ptr);
+				assert(orec != nullptr);
+				if (info && info->upcast(ptr, type()))
 				{
-					return static_cast<T*>(ptr);
+					if (orec->can_modify) {
+						return static_cast<T*>(ptr);
+					} else {
+						throw std::runtime_error
+							("Attempt to unwrap const C++ object (" + type().name() +
+							 ") for non-const access");
+						return nullptr;
+					}
 				}
 			}
 			value = obj->GetPrototype();
@@ -847,7 +943,7 @@ public:
 	{
 		v8::HandleScope scope(isolate_);
 		while (value->IsObject())
-  	{
+		{
 			v8::Handle<v8::Object> obj = value->ToObject();
 			if (obj->InternalFieldCount() == 2)
 			{
@@ -855,15 +951,26 @@ public:
 				class_info* info = static_cast<class_info*>(obj->GetAlignedPointerFromInternalField(1));
 				if (info)
 				{
-					managed_shared_ptr_ptr mspp(info->find_managed_shared_ptr_ptr(ptr));
-					if (mspp)
+					const object_record* orec = info->find_object_record(ptr);
+					assert(orec != nullptr);
+					if (!orec->shptr)
 					{
-						managed_shared_ptr_ptr cast_mspp = info->managed_shared_ptr_ptr_cast
-							(mspp, type());
-						if (cast_mspp != nullptr)
-						{
-							return *(static_cast<std::shared_ptr<T>*>(cast_mspp.get()));
-						}
+						throw std::runtime_error
+							("Attempt to unwrap shared_ptr<" +
+							 info->type().name() + "> for non-shared object");
+					}
+					if (!orec->can_modify)
+					{
+						throw std::runtime_error
+							("Attempt to unwrap const C++ object (" + type().name() +
+							 ") for non-const access");
+						return nullptr;
+					}
+					managed_shared_ptr_ptr cast_mspp = info->managed_shared_ptr_ptr_upcast
+							(orec->shptr, type());
+					if (cast_mspp != nullptr)
+					{
+						return *(static_cast<std::shared_ptr<T>*>(cast_mspp.get()));
 					}
 				}
 			}
@@ -871,28 +978,67 @@ public:
 		}
 		return nullptr;
 	}
+
+	std::shared_ptr<T const> unwrap_const_shared_object
+	(v8::Local<v8::Value> value)
+	{
+		v8::HandleScope scope(isolate_);
+		while (value->IsObject())
+		{
+			v8::Handle<v8::Object> obj = value->ToObject();
+			if (obj->InternalFieldCount() == 2)
+			{
+				void* ptr = obj->GetAlignedPointerFromInternalField(0);
+				class_info* info = static_cast<class_info*>(obj->GetAlignedPointerFromInternalField(1));
+				if (info)
+				{
+					const object_record* orec = info->find_object_record(ptr);
+					assert(orec != nullptr);
+					if (!orec->shptr)
+					{
+						throw std::runtime_error
+							("Attempt to unwrap shared_ptr<" +
+							 info->type().name() + "> for non-shared object");
+					}
+					managed_shared_ptr_ptr cast_mspp = info->managed_shared_ptr_ptr_upcast
+							(orec->shptr, type());
+					if (cast_mspp != nullptr)
+					{
+						return *(static_cast<std::shared_ptr<T>*>(cast_mspp.get()));
+					}
+				}
+			}
+			value = obj->GetPrototype();
+		}
+		return nullptr;
+	}	
+	
+	v8::Handle<v8::Object> find_object_or_null(T const* obj) const
+	{
+		return class_info::find_object(isolate_, obj);
+	}
 	
 	v8::Handle<v8::Object> find_object(T const* obj)
 	{
 		auto result = class_info::find_object(isolate_, obj);
-		if (result.IsEmpty() && automatically_wrap_missing_objects_as_external_) {
-			// XXX this is dodgy
-			return wrap_external_object(const_cast<T*>(obj));
+		if (result.IsEmpty() && throw_exception_when_object_not_found_) {
+			throw std::runtime_error
+				("Couldn't find JS wrapper for provided " + type().name());
 		}
 		return result;
 	}
 
-#if 0
-	void destroy_objects()
+	/*
+	v8::Handle<v8::Object> find_or_wrap_shared_object
+	(std::shared_ptr<T> obj)
 	{
-		class_info::remove_objects(isolate_, &factory<T>::destroy);
+		auto result = class_info::find_object(isolate_, obj.get());
+		if (result.IsEmpty()) {
+			return wrap_shared(obj, true, count_shared_as_externally_allocated_);
+		}
+		return result;
 	}
-
-	void destroy_object(T* obj)
-	{
-		class_info::remove_object(isolate_, obj, &factory<T>::destroy);
-	}
-#endif
+	*/
 
 	void remove_object(T* obj)
 	{
@@ -912,7 +1058,7 @@ private:
 	typedef std::function<size_t(const T*)> object_size_func_type;
 	object_size_func_type object_size_func_;
 	bool count_shared_as_externally_allocated_;
-	bool automatically_wrap_missing_objects_as_external_;
+	bool throw_exception_when_object_not_found_;
 	
 	v8::UniquePersistent<v8::FunctionTemplate> func_;
 	v8::UniquePersistent<v8::FunctionTemplate> js_func_;
@@ -933,23 +1079,6 @@ public:
 		: class_singleton_(detail::class_singletons::add_class<T>(isolate))
 	{
 	}
-
-#if 0
-	class_(v8::Isolate* isolate, class_construct_using_shared_ptr_tag)
-		: class_singleton_(detail::class_singletons::add_class<T>(isolate, true))
-	{
-	}
-#endif
-	
-#if 0
-	/// Set class constructor signature
-	template<typename ...Args>
-	class_& ctor()
-	{
-		class_singleton_.template ctor<Args...>();
-		return *this;
-	}
-#endif
 
 	template<typename ...Args>
 	class_& use_class_constructor()
@@ -993,11 +1122,6 @@ public:
 		return *this;
 	}
 
-	class_& set_automatically_wrap_missing_objects_as_external(bool s) {
-		class_singleton_.set_automatically_wrap_missing_objects_as_external(s);
-		return *this;
-	}
-	
 	/// Inhert from C++ class U
 	template<typename U>
 	class_& inherit()
@@ -1005,6 +1129,15 @@ public:
 		static_assert(std::is_base_of<U, T>::value, "Class U should be base for class T");
 		//TODO: std::is_convertible<T*, U*> and check for duplicates in hierarchy?
 		class_singleton_.template inherit<U>();
+		return *this;
+	}
+
+	template<typename U>
+	class_& virtually_inherit()
+	{
+		static_assert(std::is_base_of<U, T>::value, "Class U should be base for class T");
+		//TODO: std::is_convertible<T*, U*> and check for duplicates in hierarchy?
+		class_singleton_.template virtually_inherit<U>();
 		return *this;
 	}
 
@@ -1128,21 +1261,21 @@ public:
 	/// It will not take ownership of the C++ pointer.
 	static v8::Handle<v8::Object> reference_external(v8::Isolate* isolate, T* ext)
 	{
-		return detail::class_singletons::find_class<T>(isolate).wrap_external_object(ext);
+		return detail::class_singletons::find_class<T>(isolate).
+			wrap_external_object(ext);
 	}
 
+	static v8::Handle<v8::Object> reference_const_external
+	(v8::Isolate* isolate, T const* ext)
+	{
+		return detail::class_singletons::find_class<T>(isolate).
+			wrap_external_const_object(ext);		
+	}
+	
 	static void remove_object(v8::Isolate* isolate, T* obj)
 	{
 		detail::class_singletons::find_class<T>(isolate).remove_object(obj);
 	}
-	
-#if 0
-	/// Remove external reference from JavaScript
-	static void unreference_external(v8::Isolate* isolate, T* ext)
-	{
-		return detail::class_singletons::find_class<T>(isolate).remove_object(isolate, ext);
-	}
-#endif
 	
 	/// As reference_external but delete memory for C++ object
 	/// when JavaScript object is deleted. You must use "new" to allocate ext.
@@ -1154,73 +1287,124 @@ public:
 	/// Get wrapped object from V8 value, may return nullptr on fail.
 	static T* unwrap_object(v8::Isolate* isolate, v8::Handle<v8::Value> value)
 	{
-		return detail::class_singletons::find_class<T>(isolate).unwrap_object(value);
+		return detail::class_singletons::find_class<T>(isolate).
+			unwrap_object(value);
 	}
 
-	static std::shared_ptr<T> unwrap_shared_object(v8::Isolate* isolate, v8::Handle<v8::Value> value)
-	{
-		return detail::class_singletons::find_class<T>(isolate).unwrap_shared_object(value);
+	static T const* unwrap_const_object(v8::Isolate* isolate,
+																			v8::Handle<v8::Value> value) {
+		return detail::class_singletons::find_class<T>(isolate).
+			unwrap_const_object(value);
 	}
 	
-	static v8::Handle<v8::Object> wrap_shared_object(v8::Isolate* isolate, std::shared_ptr<T> obj)
+	static std::shared_ptr<T> unwrap_shared_object
+	(v8::Isolate* isolate, v8::Handle<v8::Value> value)
+	{
+		return detail::class_singletons::find_class<T>(isolate).
+			unwrap_shared_object(value);
+	}
+
+	static std::shared_ptr<T const> unwrap_const_shared_object
+	(v8::Isolate* isolate, v8::Handle<v8::Value> value)
+	{
+		return detail::class_singletons::find_class<T>(isolate).
+			unwrap_const_shared_object(value);
+	}
+
+	
+	static v8::Handle<v8::Object> wrap_shared_object(v8::Isolate* isolate,
+																									 std::shared_ptr<T> obj)
 	{
 		auto& c = detail::class_singletons::find_class<T>(isolate);
 		return c.wrap_shared
-			(obj, c.get_count_shared_against_vm_size());
+			(obj, true, c.get_count_shared_against_vm_size());
 	}
 
-#if 0
-  // Removed. Use wrap_[shared_]object instead after constructing it yourself.
-	
-	/// Create a wrapped C++ object and import it into JavaScript.
-	template<typename ...Args>
-	static v8::Handle<v8::Object> create_object(v8::Isolate* isolate, Args... args)
+	static v8::Handle<v8::Object> wrap_const_shared_object
+	(v8::Isolate* isolate, std::shared_ptr<T const> obj)
 	{
-		T* obj = v8pp::factory<T>::create(isolate, std::forward<Args>(args)...);
-		return import_external(isolate, obj);
+		auto& c = detail::class_singletons::find_class<T>(isolate);
+		return c.wrap_shared
+			(std::const_pointer_cast<T>(obj), false,
+			 c.get_count_shared_against_vm_size());
+	}
+	
+	static bool object_already_wrapped(v8::Isolate* isolate, T const* obj) {
+		auto& c = detail::class_singletons::find_class<T>(isolate);
+		return c.object_already_wrapped(obj);
 	}
 
-	template <typename ...Args>
-	static v8::Handle<v8::Object> create_shared_object
-	(v8::Isolate* isolate, std::shared_ptr<T>* shared_ptr_ptr,  Args... args) {
-		T* obj = v8pp::factory<T>::create(isolate, std::forward<Args>(args)...);
-		std::shared_ptr<T> sp(obj);
-		if (shared_ptr_ptr != nullptr) { *shared_ptr_ptr = sp; }
-		return wrap_shared_object(isolate, sp);
+	static bool object_already_wrapped(v8::Isolate* isolate,
+																		 std::shared_ptr<T const> obj) {
+		return object_already_wrapped(isolate, obj.get());
 	}
-#endif
+
+	static bool object_already_wrapped_as_this_class
+	(v8::Isolate* isolate, T const* obj) {
+		auto& c = detail::class_singletons::find_class<T>(isolate);
+		return (c.find_object_record(obj) != nullptr);
+	}
+
+	static bool object_already_wrapped_as_this_class
+	(v8::Isolate* isolate, std::shared_ptr<T const> obj) {
+		return object_already_wrapped_as_this_class(isolate, obj.get());
+	}
 	
-	/// Find V8 object handle for a wrapped C++ object, may return empty handle on fail.
+	static bool object_already_wrapped_as_different_class
+	(v8::Isolate* isolate, T const* obj) {
+		auto& c = detail::class_singletons::find_class<T>(isolate);
+		if (c.find_object_record(obj) != nullptr) {
+			return false;
+		}
+		return c.object_already_wrapped(obj);
+	}
+
+	static bool object_already_wrapped_as_different_class
+	(v8::Isolate* isolate, std::shared_ptr<T const> obj) {
+		return object_already_wrapped_as_different_class(isolate, obj.get());
+	}
+	
+	
+
+	
+	/// Find V8 object handle for a wrapped C++ object.
 	static v8::Handle<v8::Object> find_object(v8::Isolate* isolate, T const* obj)
 	{
 		return detail::class_singletons::find_class<T>(isolate).find_object(obj);
 	}
 
+	static v8::Handle<v8::Object> find_object_or_null
+	(v8::Isolate* isolate, T const* obj) {
+		return detail::class_singletons::find_class<T>(isolate).
+			find_object_or_null(obj);
+	}
+	
+	/*
 	static v8::Handle<v8::Object> find_object(v8::Isolate* isolate,
 																						std::shared_ptr<T> optr) {
 		return find_object(optr.get());
 	}
+	*/
+	/*
+	static v8::Handle<v8::Object> find_or_wrap_shared_object
+	(v8::Isolate* isolate, std::shared_ptr<T> optr) {
+		return detail::class_singletons::find_class<T>(isolate).
+			find_or_wrap_shared_object(optr);
+	}
+	*/
+
+	static v8::Handle<v8::Object> find_shared_object
+	(v8::Isolate* isolate, std::shared_ptr<T> optr) {
+		return detail::class_singletons::find_class<T>(isolate).
+			find_object(optr.get());
+	}
+
+	static v8::Handle<v8::Object> find_shared_object_or_null
+	(v8::Isolate* isolate, std::shared_ptr<T> optr) {
+		return detail::class_singletons::find_class<T>(isolate).
+			find_object_or_null(optr.get());
+	}
 	
-#if 0
-	/// Destroy wrapped C++ object
-	static void destroy_object(v8::Isolate* isolate, T* obj)
-	{
-		detail::class_singletons::find_class<T>(isolate).destroy_object(obj);
-	}
-
-	/// Destroy all wrapped C++ objects of this class
-	static void destroy_objects(v8::Isolate* isolate)
-	{
-		detail::class_singletons::find_class<T>(isolate).destroy_objects();
-	}
-
-	/// Destroy all wrapped C++ objects and this binding class_
-	static void destroy(v8::Isolate* isolate)
-	{
-		detail::class_singletons::remove_class<T>(isolate);
-	}
-#endif
-
 	/// Remove all wrapped C++ objects of this class
 	static void remove_objects(v8::Isolate* isolate)
 	{
@@ -1233,20 +1417,6 @@ public:
 		detail::class_singletons::remove_class<T>(isolate);
 	}
 
-	// TEMPORARY STUFF we're going to delete once we're done refactoring and
-	// debugging
-
-	static void destroy(v8::Isolate* isolate)
-	{
-		remove(isolate);
-	}
-	
-	template <typename ...Args>
-	class_& ctor()
-	{
-		return use_class_constructor<Args...>();
-	}
-	
 private:
 	template<typename Attribute>
 	static void member_get(v8::Local<v8::String>, v8::PropertyCallbackInfo<v8::Value> const& info)
