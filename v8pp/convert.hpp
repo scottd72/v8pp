@@ -665,7 +665,7 @@ struct convert<const T,
 */
 
 template <typename T>
-struct convert<std::shared_ptr<T>, typename std::enable_if<is_wrapped_class<T>::value>::type>
+struct convert<std::shared_ptr<T>, typename std::enable_if<is_wrapped_class<T>::value && !std::is_const<T>::value>::type>
 {
 	using from_type = std::shared_ptr<T>;
 	using to_type = v8::Handle<v8::Object>;
@@ -723,7 +723,7 @@ struct convert<std::shared_ptr<T const>, typename std::enable_if<is_wrapped_clas
 	}
 	static to_type to_v8(v8::Isolate* isolate, from_type value)
 	{
-		return class_<class_type>::find_shared_object(isolate, value);
+		return class_<class_type>::find_const_shared_object(isolate, value);
 	}
 };
 
@@ -738,6 +738,41 @@ struct convert<T&> : convert<T> {};
 
 template<typename T>
 struct convert<T const&> : convert<T> {};
+
+
+template <typename T, typename Enable = void>
+struct convert_result_to_v8 {
+	using from_type = typename convert<T>::from_type;
+	using to_type = typename convert<T>::to_type;
+	static to_type result_to_v8(v8::Isolate* isolate, from_type const& value) {
+		return convert<T>::to_v8(isolate, value);
+	}
+};
+
+template <typename T>
+struct convert_result_to_v8
+<T, typename std::enable_if<is_wrapped_class<T>::value
+														&& !std::is_const<T>::value>::type> {
+	using from_type = T;
+	using class_type = typename std::remove_cv<T>::type;
+	using to_type = typename convert<T>::to_type;
+	static to_type result_to_v8(v8::Isolate* isolate, from_type& value) {
+		class_type* mycopy(new class_type(std::move(value)));
+		return class_<class_type>::import_external(isolate, mycopy);
+	}
+};
+
+template <typename T>
+struct convert_result_to_v8
+<T const, typename std::enable_if<is_wrapped_class<T>::value>::type> {
+	using from_type = T const;
+	using class_type = typename std::remove_cv<T>::type;
+	using to_type = typename convert<T>::to_type;
+	static to_type result_to_v8(v8::Isolate* isolate, from_type& value) {
+		class_type* mycopy(new class_type(std::move(value)));
+		return class_<class_type>::import_const_external(isolate, mycopy);
+	}
+};
 
 template<typename T>
 auto from_v8(v8::Isolate* isolate, v8::Handle<v8::Value> value)
@@ -815,6 +850,14 @@ v8::Local<T> to_local(v8::Isolate* isolate, v8::PersistentBase<T> const& handle)
 		return *reinterpret_cast<v8::Local<T>*>(const_cast<v8::PersistentBase<T>*>(&handle));
 	}
 }
+
+template <typename T>
+auto result_to_v8(v8::Isolate* isolate, T&& value)
+	-> decltype(convert_result_to_v8<T>::result_to_v8(isolate, value))
+{
+	return convert_result_to_v8<T>::result_to_v8(isolate, value);
+}
+
 
 template <typename T, typename Enable = void> struct convert_isolate
 {

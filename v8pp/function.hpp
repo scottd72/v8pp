@@ -233,11 +233,26 @@ struct first_param_is_const_shared_ptr
     ::value>
  ::type>: public std::true_type {};
 
+template <typename F, typename Enable=void>
+struct first_param_is_const: public std::false_type {};
+
+template <typename F>
+struct first_param_is_const
+<F,
+ typename std::enable_if
+ <std::is_const<typename std::remove_reference
+								<typename std::remove_pointer
+								 < typename std::tuple_element
+									 <0, typename function_traits<F>::arguments>::type
+									 >::type>::type>::value
+	>::type>: public std::true_type {}; 
+
 
 // Added
 template <typename F>
 typename std::enable_if<!std::is_member_function_pointer<F>::value
-                        && !first_param_is_shared_ptr<F>::value,
+                        && !first_param_is_shared_ptr<F>::value
+												&& !first_param_is_const<F>::value,
                         typename function_traits<F>::return_type>::type
 invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 	using arguments = typename function_traits<F>::arguments;
@@ -250,6 +265,25 @@ invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
 	v8::Local<v8::Object> obj = args.This();
 	return call_noncppmethod_from_v8_with_js_this
 		(*class_<class_type>::unwrap_object(isolate, obj),
+			std::forward<F>(get_external_data<F>(args.Data())), args);
+}
+
+template <typename F>
+typename std::enable_if<!std::is_member_function_pointer<F>::value
+                        && !first_param_is_shared_ptr<F>::value
+												&& first_param_is_const<F>::value,
+                        typename function_traits<F>::return_type>::type
+invoke_as_method(v8::FunctionCallbackInfo<v8::Value> const& args) {
+	using arguments = typename function_traits<F>::arguments;
+	static_assert(std::tuple_size<arguments>::value > 0, "");
+	using class_type = 
+          typename std::decay<
+            typename std::tuple_element<0, arguments>::type>::type;
+
+	v8::Isolate* isolate = args.GetIsolate();
+	v8::Local<v8::Object> obj = args.This();
+	return call_noncppmethod_from_v8_with_js_this
+		(*class_<class_type>::unwrap_const_object(isolate, obj),
 			std::forward<F>(get_external_data<F>(args.Data())), args);
 }
 
@@ -310,7 +344,7 @@ template<typename F>
 typename std::enable_if<!is_void_return<F>::value>::type
 forward_ret(v8::FunctionCallbackInfo<v8::Value> const& args)
 {
-	args.GetReturnValue().Set(to_v8(args.GetIsolate(),
+	args.GetReturnValue().Set(result_to_v8(args.GetIsolate(),
 		invoke<F>(args)));
 }
 
@@ -325,7 +359,7 @@ template<typename F>
 typename std::enable_if<!is_void_return<F>::value>::type
 forward_ret_method(v8::FunctionCallbackInfo<v8::Value> const& args)
 {
-	args.GetReturnValue().Set(to_v8(args.GetIsolate(),
+	args.GetReturnValue().Set(result_to_v8(args.GetIsolate(),
 		invoke_as_method<F>(args)));
 }
 
@@ -340,7 +374,7 @@ template<typename F>
 typename std::enable_if<!is_void_return<F>::value>::type
 forward_ret_nonmethod(v8::FunctionCallbackInfo<v8::Value> const& args)
 {
-	args.GetReturnValue().Set(to_v8(args.GetIsolate(),
+	args.GetReturnValue().Set(result_to_v8(args.GetIsolate(),
 		invoke_as_nonmethod<F>(args)));
 }
 

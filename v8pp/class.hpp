@@ -594,7 +594,7 @@ public:
 		, object_size_func_(&default_object_size_func<T>)
 		, count_shared_as_externally_allocated_(false)
 		, throw_exception_when_object_not_found_(true)
-			
+		, autowrap_shared_(false)
 	{
 		v8::Local<v8::FunctionTemplate> func = v8::FunctionTemplate::New(isolate_);
 		v8::Local<v8::FunctionTemplate> js_func = v8::FunctionTemplate::New(isolate_,
@@ -809,8 +809,16 @@ public:
 		throw_exception_when_object_not_found_ = t;
 	}
 	
-	void get_throw_exception_when_object_not_found() const {
+	bool get_throw_exception_when_object_not_found() const {
 		return throw_exception_when_object_not_found_;
+	}
+
+	void set_autowrap_shared(bool a) {
+		autowrap_shared_ = a;
+	}
+
+	bool get_autowrap_shared() const {
+		return autowrap_shared_;
 	}
 	
 	template<typename U>
@@ -1013,7 +1021,7 @@ public:
 		return nullptr;
 	}	
 	
-	v8::Handle<v8::Object> find_object_or_null(T const* obj) const
+	v8::Handle<v8::Object> find_object_or_empty(T const* obj) const
 	{
 		return class_info::find_object(isolate_, obj);
 	}
@@ -1028,6 +1036,48 @@ public:
 		return result;
 	}
 
+	/*
+	v8::Handle<v8::Object> find_shared_object
+	(std::shared_ptr<T> obj) {
+		auto result = find_object_or_empty(obj.get());
+		if (result.IsEmpty() && autowrap_shared_) {
+			return wrap_shared(obj, !std::is_const<T>::value,
+												 count_shared_as_externally_allocated_);
+		} else if (result.IsEmpty() && throw_exception_when_object_not_found_) {
+			throw std::runtime_error
+				("Couldn't find JS wrapper for provided (shared) " + type().name());
+		}
+		return result;
+	}
+	*/
+
+	v8::Handle<v8::Object> find_shared_object
+	(std::shared_ptr<T> obj) {
+		auto result = find_object_or_empty(obj.get());
+		if (result.IsEmpty() && autowrap_shared_) {
+			return wrap_shared(obj, true,
+												 count_shared_as_externally_allocated_);
+		} else if (result.IsEmpty() && throw_exception_when_object_not_found_) {
+			throw std::runtime_error
+				("Couldn't find JS wrapper for provided (shared) " + type().name());
+		}
+		return result;
+	}
+
+	v8::Handle<v8::Object> find_const_shared_object
+	(std::shared_ptr<T const> obj) {
+		auto result = find_object_or_empty(obj.get());
+		if (result.IsEmpty() && autowrap_shared_) {
+			return wrap_shared(std::const_pointer_cast<T>(obj), false,
+												 count_shared_as_externally_allocated_);
+		} else if (result.IsEmpty() && throw_exception_when_object_not_found_) {
+			throw std::runtime_error
+				("Couldn't find JS wrapper for provided (shared) " + type().name());
+		}
+		return result;
+	}
+
+	
 	/*
 	v8::Handle<v8::Object> find_or_wrap_shared_object
 	(std::shared_ptr<T> obj)
@@ -1059,6 +1109,7 @@ private:
 	object_size_func_type object_size_func_;
 	bool count_shared_as_externally_allocated_;
 	bool throw_exception_when_object_not_found_;
+	bool autowrap_shared_;
 	
 	v8::UniquePersistent<v8::FunctionTemplate> func_;
 	v8::UniquePersistent<v8::FunctionTemplate> js_func_;
@@ -1122,6 +1173,16 @@ public:
 		return *this;
 	}
 
+	class_& set_throw_exception_when_object_not_found(bool t) {
+		class_singleton_.set_throw_exception_when_object_not_found(t);
+		return *this;
+	}
+	
+	class_& set_autowrap_shared(bool a) {
+		class_singleton_.set_autowrap_shared(a);
+		return *this;
+	}
+	
 	/// Inhert from C++ class U
 	template<typename U>
 	class_& inherit()
@@ -1284,6 +1345,13 @@ public:
 		return detail::class_singletons::find_class<T>(isolate).wrap_object(ext);
 	}
 
+	static v8::Handle<v8::Object> import_const_external(v8::Isolate* isolate,
+																											T const* ext)
+	{
+		return detail::class_singletons::find_class<T>(isolate).wrap_const_object
+			(ext);		
+	}
+	
 	/// Get wrapped object from V8 value, may return nullptr on fail.
 	static T* unwrap_object(v8::Isolate* isolate, v8::Handle<v8::Value> value)
 	{
@@ -1364,19 +1432,16 @@ public:
 		return object_already_wrapped_as_different_class(isolate, obj.get());
 	}
 	
-	
-
-	
 	/// Find V8 object handle for a wrapped C++ object.
 	static v8::Handle<v8::Object> find_object(v8::Isolate* isolate, T const* obj)
 	{
 		return detail::class_singletons::find_class<T>(isolate).find_object(obj);
 	}
 
-	static v8::Handle<v8::Object> find_object_or_null
+	static v8::Handle<v8::Object> find_object_or_empty
 	(v8::Isolate* isolate, T const* obj) {
 		return detail::class_singletons::find_class<T>(isolate).
-			find_object_or_null(obj);
+			find_object_or_empty(obj);
 	}
 	
 	/*
@@ -1396,14 +1461,22 @@ public:
 	static v8::Handle<v8::Object> find_shared_object
 	(v8::Isolate* isolate, std::shared_ptr<T> optr) {
 		return detail::class_singletons::find_class<T>(isolate).
-			find_object(optr.get());
+			find_shared_object(optr);
 	}
 
+	static v8::Handle<v8::Object> find_const_shared_object
+	(v8::Isolate* isolate, std::shared_ptr<T const> optr) {
+		return detail::class_singletons::find_class<T>(isolate).
+			find_const_shared_object(optr);
+	}
+
+#if 0	
 	static v8::Handle<v8::Object> find_shared_object_or_null
 	(v8::Isolate* isolate, std::shared_ptr<T> optr) {
 		return detail::class_singletons::find_class<T>(isolate).
 			find_object_or_null(optr.get());
 	}
+#endif
 	
 	/// Remove all wrapped C++ objects of this class
 	static void remove_objects(v8::Isolate* isolate)
