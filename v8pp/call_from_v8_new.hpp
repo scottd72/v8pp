@@ -334,6 +334,9 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 		}
 	}
 
+	template <class X>
+	static inline void fix_bogus_ignored_warning(X& x) {}
+
 	/*
    In this case, the mapping from ParamIndices to v8 arg indices 
    is the identity except when there are special argument types,
@@ -353,8 +356,11 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 							 <ParamIndices, v8_function_arg_index_sequence>::value, args)...);
 
 		auto res = result_saver
-			([&func,&prepare_tuple,&args]() -> result_type
-			 { return func
+                  ([&func,&prepare_tuple,&args]() -> result_type
+			 {
+				 fix_bogus_ignored_warning(prepare_tuple);
+				 fix_bogus_ignored_warning(args);				 
+				 return func
 				 (call_from_v8_cpp_param_type_info
 					<typename std::tuple_element<ParamIndices,
 					param_tuple_type>::type>::
@@ -390,7 +396,10 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 
 		auto res = result_saver
 			([&obj,&method,&prepare_tuple,&args]() -> result_type
-			 { return (obj.*method)
+			 {
+				 fix_bogus_ignored_warning(prepare_tuple);
+				 fix_bogus_ignored_warning(args);				 
+				 return (obj.*method)
 				 (call_from_v8_cpp_param_type_info
 					<typename std::tuple_element<ParamIndices, param_tuple_type>::type>::
 					get_param
@@ -424,7 +433,10 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 
 		auto res = result_saver
 			([&obj,&func,&prepare_tuple,&args]() ->result_type
-			 { return func
+			 {
+				 fix_bogus_ignored_warning(prepare_tuple);
+				 fix_bogus_ignored_warning(args);				 
+				 return func
 				 (obj, 
 					call_from_v8_cpp_param_type_info
 					<typename std::tuple_element<ParamIndices, param_tuple_type>::type>::
@@ -456,7 +468,10 @@ struct call_from_v8_helper<result_type_, param_tuple_type_,
 
 		auto res = result_saver
 			([&obj,&func,&prepare_tuple,&args]() ->result_type
-			 { return func
+			 {
+				 fix_bogus_ignored_warning(prepare_tuple);
+				 fix_bogus_ignored_warning(args);
+				 return func
 				 (obj, 
 					call_from_v8_cpp_param_type_info
 					<typename std::tuple_element<ParamIndices, param_tuple_type>::type>::

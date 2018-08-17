@@ -905,6 +905,10 @@ public:
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
+				if (ptr == nullptr) {
+					throw std::runtime_error
+						(class_name(type()) + ": C++ object already removed");
+				}
 				class_info* info = static_cast<class_info*>(obj->GetAlignedPointerFromInternalField(1));
 				assert(info->find_object_record(ptr) != nullptr); // added by SD
 				if (info && info->upcast(ptr, type()))
@@ -927,6 +931,11 @@ public:
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
+				if (ptr == nullptr) {
+					throw std::runtime_error
+						(class_name(type()) + ": C++ object already removed");
+				}
+				
 				class_info* info = static_cast<class_info*>(obj->GetAlignedPointerFromInternalField(1));
 				const object_record* orec = info->find_object_record(ptr);
 				assert(orec != nullptr);
