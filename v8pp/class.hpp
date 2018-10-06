@@ -646,9 +646,11 @@ public:
 				 pointer_str(object));
 		}
 		v8::EscapableHandleScope scope(isolate_);
+		v8::Local<v8::Context> context = isolate_->GetCurrentContext();
 
 		v8::Local<v8::Object> obj =
-			class_function_template()->GetFunction()->NewInstance();
+			class_function_template()->GetFunction()->NewInstance(context).
+			ToLocalChecked();
 		obj->SetAlignedPointerInInternalField(0, object);
 		obj->SetAlignedPointerInInternalField(1, this);
 
@@ -687,8 +689,10 @@ public:
 		}
 		
 		v8::EscapableHandleScope scope(isolate_);
+		v8::Local<v8::Context> context = isolate_->GetCurrentContext();
 
-		v8::Local<v8::Object> obj = class_function_template()->GetFunction()->NewInstance();
+		v8::Local<v8::Object> obj = class_function_template()->GetFunction()->
+			NewInstance(context).ToLocalChecked();
 		obj->SetAlignedPointerInInternalField(0, object.get());
 		obj->SetAlignedPointerInInternalField(1, this);
 
@@ -901,7 +905,7 @@ public:
 
 		while (value->IsObject())
 		{
-			v8::Handle<v8::Object> obj = value->ToObject();
+			v8::Handle<v8::Object> obj = value.As<v8::Object>();
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
@@ -927,7 +931,7 @@ public:
 
 		while (value->IsObject())
 		{
-			v8::Handle<v8::Object> obj = value->ToObject();
+			v8::Handle<v8::Object> obj = value.As<v8::Object>();
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
@@ -961,7 +965,7 @@ public:
 		v8::HandleScope scope(isolate_);
 		while (value->IsObject())
 		{
-			v8::Handle<v8::Object> obj = value->ToObject();
+			v8::Handle<v8::Object> obj = value.As<v8::Object>();
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);
@@ -1002,7 +1006,7 @@ public:
 		v8::HandleScope scope(isolate_);
 		while (value->IsObject())
 		{
-			v8::Handle<v8::Object> obj = value->ToObject();
+			v8::Handle<v8::Object> obj = value.As<v8::Object>();
 			if (obj->InternalFieldCount() == 2)
 			{
 				void* ptr = obj->GetAlignedPointerFromInternalField(0);

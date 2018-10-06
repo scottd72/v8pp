@@ -252,14 +252,17 @@ v8::Handle<v8::Value> context::run_script(std::string const& source,
 	std::string const& filename)
 {
 	v8::EscapableHandleScope scope(isolate_);
+  v8::Local<v8::Context> context = isolate_->GetCurrentContext();
 
-	v8::Local<v8::Script> script = v8::Script::Compile(
-		to_v8(isolate_, source), to_v8(isolate_, filename));
+  v8::ScriptOrigin origin(to_v8(isolate_, filename));
+  v8::Local<v8::Script> script;
+	bool const is_valid = v8::Script::Compile(context,
+		to_v8(isolate_, source), &origin).ToLocal(&script);
 
 	v8::Local<v8::Value> result;
-	if (!script.IsEmpty())
+	if (!script.IsEmpty() && is_valid)
 	{
-		result = script->Run();
+		result = script->Run(context).ToLocalChecked();
 	}
 	return scope.Escape(result);
 }
