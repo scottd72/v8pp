@@ -409,7 +409,11 @@ public:
 		std::unordered_set<class_info const*> already_visited;
 		return pointer_already_wrapped_helper(object, already_visited);
 	}
-		
+
+	size_t num_object_records() const {
+		return object_records_.size();
+	}
+	
 protected:
 	struct base_class_info
 	{
@@ -1503,6 +1507,11 @@ public:
 		detail::class_singletons::remove_class<T>(isolate);
 	}
 
+	static size_t num_objects(v8::Isolate* isolate) {
+		return detail::class_singletons::find_class<T>(isolate).
+			num_object_records();
+	}
+	
 private:
 	template<typename Attribute>
 	static void member_get(v8::Local<v8::String>, v8::PropertyCallbackInfo<v8::Value> const& info)
